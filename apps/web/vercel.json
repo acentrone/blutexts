@@ -1,0 +1,18 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "outputDirectory": ".next",
+  "env": {
+    "NEXT_PUBLIC_API_URL": "@bluesend_api_url",
+    "NEXT_PUBLIC_WS_URL": "@bluesend_ws_url",
+    "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY": "@stripe_publishable_key"
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://api.blutexts.com/api/:path*"
+    }
+  ]
+}

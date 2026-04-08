@@ -1,0 +1,15 @@
+.env
+.env.local
+.env.*.local
+node_modules/
+.next/
+apps/web/.next/
+apps/web/node_modules/
+vendor/
+*.exe
+*.dylib
+*.so
+*.test
+tmp/
+.air.toml
+dist/
