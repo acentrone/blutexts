@@ -102,7 +102,7 @@ func main() {
 
 	// ── HTTP Handlers ─────────────────────────────────────────
 	authMw := middleware.NewAuthMiddleware(cfg.JWTSecret)
-	adminKeyMw := middleware.NewAdminKeyAuth(cfg.AdminAPIKey)
+	adminKeyMw := middleware.NewAdminAuth(cfg.AdminAPIKey, authMw)
 
 	authHandler := handlers.NewAuthHandler(pool, cfg.JWTSecret, cfg.JWTRefreshSecret)
 	messageHandler := handlers.NewMessageHandler(pool, msgRouter)

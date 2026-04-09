@@ -5,10 +5,20 @@ import useSWR from "swr";
 import { SearchIcon, CheckCircle2Icon, AlertTriangleIcon, ClockIcon, XCircleIcon } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL;
-const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY;
+
+function getAuthHeader(): Record<string, string> {
+  const token = localStorage.getItem("access_token");
+  return { Authorization: `Bearer ${token}` };
+}
 
 function adminFetcher(url: string) {
-  return fetch(url, { headers: { "X-Admin-Key": ADMIN_KEY || "" } }).then((r) => r.json());
+  return fetch(url, { headers: getAuthHeader() }).then((r) => {
+    if (r.status === 401 || r.status === 403) {
+      window.location.href = "/login";
+      throw new Error("unauthorized");
+    }
+    return r.json();
+  });
 }
 
 interface Account {
@@ -59,7 +69,7 @@ export default function AdminCustomersPage() {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        "X-Admin-Key": ADMIN_KEY || "",
+        ...getAuthHeader(),
       },
       body: JSON.stringify({ status, reason: `Admin action: set to ${status}` }),
     });

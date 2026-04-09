@@ -239,12 +239,6 @@ func (h *AdminHandler) AssignPhoneNumber(w http.ResponseWriter, r *http.Request)
 
 // GET /api/admin/stats — operator overview
 func (h *AdminHandler) GetSystemStats(w http.ResponseWriter, r *http.Request) {
-	stats := map[string]interface{}{}
-
-	h.db.QueryRow(r.Context(), `SELECT COUNT(*) FROM accounts WHERE status = 'active'`).
-		Scan(func(n *int) { stats["active_accounts"] = n }(&stats["active_accounts"]))
-
-	// Simpler direct scans
 	var activeAccounts, settingUpAccounts, pastDueAccounts, totalMessages30d, onlineDevices int
 	var totalMRR float64
 

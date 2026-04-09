@@ -27,7 +27,8 @@ type Message struct {
 	GUID        string
 	Text        string
 	IsFromMe    bool
-	Handle      string // the phone number or email
+	Handle      string // the phone number or email of the other party
+	Destination string // which local handle (number) received this message
 	ServiceName string // "iMessage" or "SMS"
 	Date        time.Time
 }
@@ -113,12 +114,16 @@ func (c *Client) GetNewMessages(since time.Time) ([]Message, error) {
 	appleEpoch := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
 	sinceApple := since.UTC().Sub(appleEpoch).Seconds()
 
+	// Join through chat_message_join → chat → chat_handle_join to find which
+	// local account/number the message was sent to. This is critical for multi-number
+	// devices where a Mac Mini hosts multiple forwarded iPhone numbers.
 	query := `
 		SELECT
 			m.guid,
 			COALESCE(m.text, ''),
 			m.is_from_me,
 			COALESCE(h.id, ''),
+			COALESCE(m.account, ''),
 			COALESCE(m.service, ''),
 			m.date
 		FROM message m
@@ -141,7 +146,7 @@ func (c *Client) GetNewMessages(since time.Time) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var dateNano int64
-		if err := rows.Scan(&m.GUID, &m.Text, &m.IsFromMe, &m.Handle, &m.ServiceName, &dateNano); err != nil {
+		if err := rows.Scan(&m.GUID, &m.Text, &m.IsFromMe, &m.Handle, &m.Destination, &m.ServiceName, &dateNano); err != nil {
 			continue
 		}
 		// Convert Apple nanoseconds to Go time

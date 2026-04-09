@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	stripeLib "github.com/stripe/stripe-go/v78"
-	"github.com/stripe/stripe-go/v78/billingportal/session"
+	portalsession "github.com/stripe/stripe-go/v78/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v78/checkout/session"
 	"github.com/stripe/stripe-go/v78/customer"
 	"github.com/stripe/stripe-go/v78/subscription"
@@ -67,12 +67,12 @@ func (b *BillingService) CreateCheckoutSession(ctx context.Context, params Creat
 		recurringPriceID = b.plans.Annual
 	}
 
-	sessionParams := &checkoutsession.Params{
+	sessionParams := &stripeLib.CheckoutSessionParams{
 		Customer:   stripeLib.String(cust.ID),
 		Mode:       stripeLib.String("subscription"),
 		SuccessURL: stripeLib.String(b.appURL + "/onboarding/success?session_id={CHECKOUT_SESSION_ID}"),
 		CancelURL:  stripeLib.String(b.appURL + "/pricing?checkout=cancelled"),
-		LineItems: []*checkoutsession.LineItemParams{
+		LineItems: []*stripeLib.CheckoutSessionLineItemParams{
 			{
 				Price:    stripeLib.String(b.plans.Setup),
 				Quantity: stripeLib.Int64(1),
@@ -82,7 +82,7 @@ func (b *BillingService) CreateCheckoutSession(ctx context.Context, params Creat
 				Quantity: stripeLib.Int64(1),
 			},
 		},
-		SubscriptionData: &checkoutsession.SubscriptionDataParams{
+		SubscriptionData: &stripeLib.CheckoutSessionSubscriptionDataParams{
 			Metadata: map[string]string{
 				"plan": params.Plan,
 			},
@@ -107,7 +107,7 @@ func (b *BillingService) CreateCheckoutSession(ctx context.Context, params Creat
 // ============================================================
 
 func (b *BillingService) CreatePortalSession(ctx context.Context, customerID, returnURL string) (string, error) {
-	sess, err := session.New(&session.Params{
+	sess, err := portalsession.New(&stripeLib.BillingPortalSessionParams{
 		Customer:  stripeLib.String(customerID),
 		ReturnURL: stripeLib.String(returnURL),
 	})

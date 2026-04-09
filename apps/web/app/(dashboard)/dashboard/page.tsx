@@ -20,7 +20,15 @@ function fetcher(url: string) {
   const token = localStorage.getItem("access_token");
   return fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
-  }).then((r) => r.json());
+  }).then((r) => {
+    if (r.status === 401) {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      window.location.href = "/login";
+      throw new Error("unauthorized");
+    }
+    return r.json();
+  });
 }
 
 interface DashboardStats {
@@ -179,13 +187,20 @@ export default function DashboardPage() {
             <p className="text-sm text-gray-600 mb-3">
               Connect your GHL account to enable bidirectional message sync.
             </p>
-            <Link
-              href={`${API}/api/oauth/connect?account_id=${account.id}`}
+            <button
+              onClick={async () => {
+                const token = localStorage.getItem("access_token");
+                const res = await fetch(`${API}/api/oauth/connect?account_id=${account.id}`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                const data = await res.json();
+                if (data.url) window.location.href = data.url;
+              }}
               className="inline-flex items-center gap-1.5 bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-amber-600 transition-colors"
             >
               Connect GHL
               <ExternalLinkIcon className="w-3.5 h-3.5" />
-            </Link>
+            </button>
           </div>
         </div>
       )}
@@ -215,7 +230,7 @@ export default function DashboardPage() {
           label="Replies received"
           value={isLoading ? "—" : (stats?.total_replied ?? 0).toLocaleString()}
           sub={
-            stats
+            stats?.response_rate != null
               ? `${stats.response_rate.toFixed(1)}% response rate`
               : undefined
           }

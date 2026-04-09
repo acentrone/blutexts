@@ -1,27 +1,43 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 )
 
-// AdminKeyAuth validates requests to internal admin endpoints using a static API key.
-// This is used for the operator dashboard and device registration, in addition to
-// the JWT-based auth for the regular admin user role.
-type AdminKeyAuth struct {
-	key string
+// AdminAuth validates requests to admin endpoints.
+// Accepts either a static API key (X-Admin-Key header) for programmatic access,
+// or a JWT Bearer token from a user with role='admin'.
+type AdminAuth struct {
+	key     string
+	authMw  *AuthMiddleware
 }
 
-func NewAdminKeyAuth(key string) *AdminKeyAuth {
-	return &AdminKeyAuth{key: key}
+func NewAdminAuth(key string, authMw *AuthMiddleware) *AdminAuth {
+	return &AdminAuth{key: key, authMw: authMw}
 }
 
-func (a *AdminKeyAuth) Middleware(next http.Handler) http.Handler {
+func (a *AdminAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		provided := r.Header.Get("X-Admin-Key")
-		if provided == "" || provided != a.key {
-			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		// Try API key first
+		if apiKey := r.Header.Get("X-Admin-Key"); apiKey != "" && apiKey == a.key {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		// Try JWT with admin role
+		token := extractBearerToken(r)
+		if token != "" {
+			claims, err := a.authMw.validateToken(token)
+			if err == nil && claims.Role == "admin" {
+				ctx := context.WithValue(r.Context(), ContextKeyUserID, claims.UserID)
+				ctx = context.WithValue(ctx, ContextKeyAccountID, claims.AccountID)
+				ctx = context.WithValue(ctx, ContextKeyUserRole, claims.Role)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 	})
 }

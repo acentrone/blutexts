@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bluesend/api/internal/models"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	stripeLib "github.com/stripe/stripe-go/v78"

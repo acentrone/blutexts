@@ -13,12 +13,18 @@ import {
 import Link from "next/link";
 
 const API = process.env.NEXT_PUBLIC_API_URL;
-const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY; // set in admin env only
 
 function adminFetcher(url: string) {
+  const token = localStorage.getItem("access_token");
   return fetch(url, {
-    headers: { "X-Admin-Key": ADMIN_KEY || "" },
-  }).then((r) => r.json());
+    headers: { Authorization: `Bearer ${token}` },
+  }).then((r) => {
+    if (r.status === 401 || r.status === 403) {
+      window.location.href = "/login";
+      throw new Error("unauthorized");
+    }
+    return r.json();
+  });
 }
 
 interface SystemStats {

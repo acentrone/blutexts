@@ -74,6 +74,7 @@ type Agent struct {
 	done chan struct{}
 
 	lastPollTime time.Time
+	localHandles []string // all iMessage handles (numbers/emails) on this device
 	sentMessages map[string]*SentMessage
 	sentMu       sync.Mutex
 }
@@ -146,6 +147,21 @@ func (a *Agent) connect() error {
 	a.connMu.Lock()
 	a.conn = conn
 	a.connMu.Unlock()
+
+	// Report all iMessage handles this device can send/receive from.
+	// This includes the Mac Mini's own number plus any forwarded iPhone numbers.
+	handles, err := a.imClient.GetHandles()
+	if err != nil {
+		log.Printf("Warning: could not list handles: %v", err)
+	} else {
+		a.localHandles = handles
+		log.Printf("Device handles: %v", handles)
+		a.sendEvent("register_handles", map[string]interface{}{
+			"device_name": a.deviceName,
+			"handles":     handles,
+		})
+	}
+
 	return nil
 }
 
@@ -294,11 +310,11 @@ func (a *Agent) pollMessages() {
 				continue
 			}
 
-			log.Printf("Inbound from %s: %.40s", msg.Handle, msg.Text)
+			log.Printf("Inbound from %s → %s: %.40s", msg.Handle, msg.Destination, msg.Text)
 			a.sendEvent(EventInboundMessage, InboundPayload{
 				IMessageGUID: msg.GUID,
 				FromAddress:  msg.Handle,
-				ToAddress:    msg.Handle, // refined per routing logic in production
+				ToAddress:    msg.Destination,
 				Content:      msg.Text,
 				ReceivedAt:   msg.Date,
 			})

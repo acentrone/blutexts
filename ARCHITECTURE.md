@@ -124,11 +124,50 @@ billing_events: id, account_id, stripe_event_id, event_type,
 
 ## iMessage Device Architecture
 
+### Physical Device Model
+
+Each **Mac Mini** acts as a hub that runs the BlueSend device agent. The Mac Mini's
+Messages.app handles iMessage send/receive. Additional phone numbers are provided
+by **iPhones** that forward their iMessages to the Mac Mini via Apple's built-in
+Text Message Forwarding feature (Settings → Messages → Text Message Forwarding).
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    MAC MINI HUB                          │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │ Messages.app (signed into Apple ID #1)          │    │
+│  │ - Number A (Mac Mini's own number)              │    │
+│  │ - Number B (forwarded from iPhone #1)           │    │
+│  │ - Number C (forwarded from iPhone #2)           │    │
+│  │ All messages appear in single chat.db           │    │
+│  └─────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │ BlueSend Device Agent (Go binary)               │    │
+│  │ - Reads chat.db, routes by handle_id            │    │
+│  │ - Sends via AppleScript                         │    │
+│  │ - Reports all handles to API on connect         │    │
+│  │ - WebSocket → api.blutexts.com                  │    │
+│  └─────────────────────────────────────────────────┘    │
+└───────────┬───────────────────┬─────────────────────────┘
+            │ Text Msg Fwd      │ Text Msg Fwd
+     ┌──────▼──────┐     ┌──────▼──────┐
+     │  iPhone #1  │     │  iPhone #2  │
+     │  Apple ID B │     │  Apple ID C │
+     │  Number B   │     │  Number C   │
+     └─────────────┘     └─────────────┘
+```
+
+**Key constraints:**
+- Messages.app on Mac Mini signs into ONE Apple ID (provides 1 number natively)
+- Each additional number requires an iPhone with its own Apple ID + Text Message Forwarding enabled
+- Each iPhone with dual eSIM can provide up to 2 numbers
+- iPhones must stay powered on, on WiFi, and near the Mac Mini
+
 ### How Messages Are Sent
 
 ```
-BlueSend API → [send job to Redis queue]
-             → Device Agent polls queue / receives via WebSocket push
+BlueSend API → [send job via WebSocket to device agent]
+             → Agent identifies which handle/number to send from
              → Agent calls AppleScript:
                tell application "Messages"
                  send "content" to buddy "recipient" of service "iMessage"
@@ -142,11 +181,21 @@ BlueSend API → [send job to Redis queue]
 ```
 Device Agent → polls ~/Library/Messages/chat.db every 500ms
              → detects new rows in message table WHERE is_from_me = 0
+             → identifies which number received it via handle_id
              → deduplicates using imessage_guid
-             → pushes to BlueSend API via WebSocket
+             → pushes to BlueSend API via WebSocket (includes from + to addresses)
+             → API routes to correct account based on phone_number assignment
              → API saves to PostgreSQL, fans out to user via WebSocket
              → API triggers GHL sync (async via Redis queue)
 ```
+
+### Multi-Number Routing
+
+The device agent reports all iMessage handles (phone numbers and emails) registered
+on the Mac Mini when it connects. The API maps these handles to assigned phone numbers
+in the database. When a message arrives, the agent includes both `from_address` and
+`to_address` (derived from `handle_id` in chat.db), allowing the API to route it
+to the correct customer account.
 
 ### Daily Limit Enforcement
 
@@ -156,6 +205,114 @@ Device Agent → polls ~/Library/Messages/chat.db every 500ms
   - If NEW contact: check daily counter against limit (50). Reject if at limit.
   - If EXISTING contact (prior conversation): bypass new-contact counter entirely
 - Counter resets at midnight in the account's configured timezone
+
+---
+
+## Scaling Plan: Zero to 50 Customers
+
+### Hardware Math
+
+| Component | Numbers provided |
+|-----------|-----------------|
+| 1 Mac Mini (own Apple ID) | 1 number |
+| 1 iPhone (single SIM) | 1 number |
+| 1 iPhone (dual eSIM) | 2 numbers |
+
+Each customer gets 1 dedicated number. Each Mac Mini hub can realistically manage
+**up to 10 iPhones** via Text Message Forwarding (Apple's practical limit before
+Messages.app performance degrades).
+
+So: **1 Mac Mini hub = 1 own number + up to 10 iPhones = 11-21 numbers**
+(depending on single vs dual SIM iPhones).
+
+### Scaling Tiers
+
+#### Tier 0: Proof of Concept (1-3 customers)
+```
+Hardware:
+  - 1× Mac Mini (M2, 8GB) .............. $599
+  - 2× iPhone SE (refurbished) .......... $300 ea
+  - 2× prepaid SIM / eSIM plan .......... $15/mo ea
+
+Numbers: 3 (1 Mac Mini + 2 iPhones)
+Monthly HW cost: ~$30/mo (SIM plans)
+One-time: ~$1,200
+```
+Setup:
+1. Mac Mini signed into Apple ID #1 → provides number #1
+2. iPhone A signed into Apple ID #2 → Text Msg Forwarding → Mac Mini → number #2
+3. iPhone B signed into Apple ID #3 → Text Msg Forwarding → Mac Mini → number #3
+4. One device agent running on Mac Mini handles all 3 numbers
+
+#### Tier 1: Early Traction (4-10 customers)
+```
+Hardware:
+  - 1× Mac Mini ......................... (existing)
+  - 7-9× iPhone SE (refurbished) ........ $300 ea
+  - Use dual eSIM where possible to double up
+  - USB charging hub .................... $50
+
+Numbers: 10 (1 Mac Mini + 9 iPhones, some dual SIM → up to 19)
+Monthly HW cost: ~$150/mo (SIM plans)
+One-time: ~$3,500 total
+```
+Still one Mac Mini hub. All iPhones on a charging shelf, connected to WiFi.
+
+#### Tier 2: Growth (11-25 customers)
+```
+Hardware:
+  - 2× Mac Mini ......................... $599 ea
+  - 15-20× iPhone SE .................... $300 ea
+  - Rack shelf or colocation space
+  - Managed switch + UPS
+
+Numbers: 25 (2 Mac Minis + ~20 iPhones with dual SIM)
+Monthly HW cost: ~$375/mo (SIM plans) + ~$100/mo (colo/power)
+One-time: ~$8,000 total
+```
+Two Mac Mini hubs, each running a device agent. Split iPhones across hubs
+(max 10 per hub). Both agents connect to the same BlueSend API.
+
+#### Tier 3: Scale (26-50 customers)
+```
+Hardware:
+  - 4× Mac Mini ......................... $599 ea
+  - 30-40× iPhone SE .................... $300 ea
+  - Small rack (1U Mac Mini mounts)
+  - Colocation or dedicated closet
+
+Numbers: 50 (4 Mac Minis + ~40 iPhones with dual SIM)
+Monthly HW cost: ~$750/mo (SIM plans) + ~$200/mo (colo/power)
+One-time: ~$16,000 total
+```
+Four Mac Mini hubs. Consider Mac Stadium or similar Apple hosting provider
+if you don't want to manage physical hardware yourself.
+
+### Cost Summary at Scale
+
+| Customers | Mac Minis | iPhones | One-time HW | Monthly HW | Revenue (at $199/mo) |
+|-----------|-----------|---------|-------------|------------|---------------------|
+| 3         | 1         | 2       | ~$1,200     | ~$30       | $597/mo             |
+| 10        | 1         | 9       | ~$3,500     | ~$150      | $1,990/mo           |
+| 25        | 2         | 20      | ~$8,000     | ~$475      | $4,975/mo           |
+| 50        | 4         | 40      | ~$16,000    | ~$950      | $9,950/mo           |
+
+Break-even on hardware is achieved within 2-3 months at each tier.
+
+### Operational Notes
+
+- **iPhone management:** iPhones only need WiFi + power + initial Apple ID setup.
+  No interaction needed after Text Message Forwarding is enabled. Keep them in
+  a drawer or on a charging rack.
+- **Monitoring:** The admin panel shows device status. If a Mac Mini goes offline,
+  all its numbers go dark. Use a UPS and enable auto-restart after power failure.
+- **Redundancy:** At Tier 2+, split high-value customers across different Mac Mini
+  hubs so a single hub failure doesn't take out all numbers.
+- **Apple ID management:** Each number needs a unique Apple ID. Use a naming convention
+  like `blutexts-001@icloud.com`, `blutexts-002@icloud.com`, etc.
+- **SIM plans:** Prepaid plans (Mint Mobile, US Mobile) at $15-25/mo per number are
+  the most cost-effective. You only need the phone number for iMessage registration —
+  actual data goes over WiFi.
 
 ---
 
