@@ -207,9 +207,10 @@ func (h *AdminHandler) AssignPhoneNumber(w http.ResponseWriter, r *http.Request)
 	accountID := chi.URLParam(r, "accountID")
 
 	var req struct {
-		Number      string `json:"number"`
-		DeviceID    string `json:"device_id"`
-		DisplayName string `json:"display_name"`
+		Number          string `json:"number"`
+		DeviceID        string `json:"device_id"`
+		DisplayName     string `json:"display_name"`
+		IMessageAddress string `json:"imessage_address"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Number == "" {
 		writeError(w, "number required", http.StatusBadRequest)
@@ -218,23 +219,102 @@ func (h *AdminHandler) AssignPhoneNumber(w http.ResponseWriter, r *http.Request)
 
 	numberID := uuid.New()
 	_, err := h.db.Exec(r.Context(), `
-		INSERT INTO phone_numbers (id, account_id, device_id, number, display_name, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 'provisioning', NOW(), NOW())
-	`, numberID, accountID, req.DeviceID, req.Number, req.DisplayName)
+		INSERT INTO phone_numbers (id, account_id, device_id, number, imessage_address, display_name, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW(), NOW())
+	`, numberID, accountID, req.DeviceID, req.Number, req.IMessageAddress, req.DisplayName)
 	if err != nil {
 		writeError(w, "could not assign number", http.StatusInternalServerError)
 		return
 	}
 
 	// Update device assigned count
-	h.db.Exec(r.Context(), `
-		UPDATE devices SET assigned_count = assigned_count + 1 WHERE id = $1
-	`, req.DeviceID)
+	if req.DeviceID != "" {
+		h.db.Exec(r.Context(), `
+			UPDATE devices SET assigned_count = assigned_count + 1 WHERE id = $1
+		`, req.DeviceID)
+	}
 
 	writeJSON(w, map[string]string{
 		"phone_number_id": numberID.String(),
-		"status":          "provisioning",
+		"status":          "active",
 	}, http.StatusCreated)
+}
+
+// GET /api/admin/accounts/{accountID}/numbers — list phone numbers for an account
+func (h *AdminHandler) GetAccountNumbers(w http.ResponseWriter, r *http.Request) {
+	accountID := chi.URLParam(r, "accountID")
+
+	rows, err := h.db.Query(r.Context(), `
+		SELECT pn.id, pn.number, pn.imessage_address, pn.display_name, pn.status,
+		       pn.device_id, COALESCE(d.name, '') as device_name, pn.created_at
+		FROM phone_numbers pn
+		LEFT JOIN devices d ON d.id = pn.device_id
+		WHERE pn.account_id = $1
+		ORDER BY pn.created_at DESC
+	`, accountID)
+	if err != nil {
+		writeError(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type PhoneNumberInfo struct {
+		ID              string  `json:"id"`
+		Number          string  `json:"number"`
+		IMessageAddress *string `json:"imessage_address"`
+		DisplayName     *string `json:"display_name"`
+		Status          string  `json:"status"`
+		DeviceID        *string `json:"device_id"`
+		DeviceName      string  `json:"device_name"`
+		CreatedAt       string  `json:"created_at"`
+	}
+
+	var numbers []PhoneNumberInfo
+	for rows.Next() {
+		var n PhoneNumberInfo
+		rows.Scan(&n.ID, &n.Number, &n.IMessageAddress, &n.DisplayName, &n.Status,
+			&n.DeviceID, &n.DeviceName, &n.CreatedAt)
+		numbers = append(numbers, n)
+	}
+	if numbers == nil {
+		numbers = []PhoneNumberInfo{}
+	}
+
+	writeJSON(w, map[string]interface{}{"numbers": numbers}, http.StatusOK)
+}
+
+// GET /api/admin/accounts/{accountID}/ghl — get GHL connection status for an account
+func (h *AdminHandler) GetAccountGHL(w http.ResponseWriter, r *http.Request) {
+	accountID := chi.URLParam(r, "accountID")
+
+	var locationID string
+	var connected bool
+	var createdAt string
+	err := h.db.QueryRow(r.Context(), `
+		SELECT location_id, connected, created_at::text FROM ghl_connections WHERE account_id = $1
+	`, accountID).Scan(&locationID, &connected, &createdAt)
+
+	if err != nil {
+		writeJSON(w, map[string]interface{}{
+			"connected":   false,
+			"location_id": "",
+		}, http.StatusOK)
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"connected":    connected,
+		"location_id":  locationID,
+		"connected_at": createdAt,
+	}, http.StatusOK)
+}
+
+// DELETE /api/admin/accounts/{accountID}/ghl — disconnect GHL for an account
+func (h *AdminHandler) DisconnectAccountGHL(w http.ResponseWriter, r *http.Request) {
+	accountID := chi.URLParam(r, "accountID")
+	h.db.Exec(r.Context(), `DELETE FROM ghl_connections WHERE account_id = $1`, accountID)
+	h.db.Exec(r.Context(), `UPDATE accounts SET ghl_location_id = NULL WHERE id = $1`, accountID)
+	writeJSON(w, map[string]string{"status": "disconnected"}, http.StatusOK)
 }
 
 // GET /api/admin/stats — operator overview

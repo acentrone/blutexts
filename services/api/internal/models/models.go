@@ -322,11 +322,12 @@ type DeviceWSEvent struct {
 }
 
 const (
-	DeviceEventSendMessage    = "send_message"
-	DeviceEventMessageStatus  = "message_status"
-	DeviceEventInboundMessage = "inbound_message"
-	DeviceEventHeartbeat      = "heartbeat"
-	DeviceEventRegister       = "register"
+	DeviceEventSendMessage     = "send_message"
+	DeviceEventMessageStatus   = "message_status"
+	DeviceEventInboundMessage  = "inbound_message"
+	DeviceEventOutboundMessage = "outbound_message"
+	DeviceEventHeartbeat       = "heartbeat"
+	DeviceEventRegister        = "register"
 )
 
 type DeviceSendPayload struct {

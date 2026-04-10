@@ -258,6 +258,87 @@ func (r *Router) HandleInbound(ctx context.Context, payload models.DeviceInbound
 	return nil
 }
 
+// HandleOutbound processes outbound messages detected by the device agent
+// (messages sent directly from Messages.app, not through the API).
+func (r *Router) HandleOutbound(ctx context.Context, payload models.DeviceInboundPayload) error {
+	// FromAddress = the local account that sent it, ToAddress = the recipient
+	var pn models.PhoneNumber
+	err := r.db.QueryRow(ctx, `
+		SELECT id, account_id FROM phone_numbers
+		WHERE number = $1 OR imessage_address = $1
+	`, payload.FromAddress).Scan(&pn.ID, &pn.AccountID)
+	if err != nil {
+		return fmt.Errorf("phone number not found for sender %s: %w", payload.FromAddress, err)
+	}
+
+	contact, err := r.upsertContact(ctx, pn.AccountID, pn.ID, payload.ToAddress)
+	if err != nil {
+		return fmt.Errorf("upsert contact: %w", err)
+	}
+
+	conv, err := r.upsertConversation(ctx, pn.AccountID, pn.ID, contact.ID)
+	if err != nil {
+		return fmt.Errorf("upsert conversation: %w", err)
+	}
+
+	// Deduplicate
+	var exists bool
+	_ = r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages WHERE imessage_guid = $1)`,
+		payload.IMessageGUID).Scan(&exists)
+	if exists {
+		return nil
+	}
+
+	guid := payload.IMessageGUID
+	now := time.Now()
+	msg := &models.Message{
+		ID:             uuid.New(),
+		ConversationID: conv.ID,
+		AccountID:      pn.AccountID,
+		PhoneNumberID:  pn.ID,
+		ContactID:      contact.ID,
+		Direction:      models.MessageDirectionOutbound,
+		Content:        payload.Content,
+		IMessageGUID:   &guid,
+		Status:         models.MessageStatusSent,
+		SentAt:         &now,
+		CreatedAt:      now,
+	}
+
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO messages (id, conversation_id, account_id, phone_number_id, contact_id,
+		                      direction, content, imessage_guid, status, sent_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, msg.ID, msg.ConversationID, msg.AccountID, msg.PhoneNumberID, msg.ContactID,
+		msg.Direction, msg.Content, msg.IMessageGUID, msg.Status,
+		msg.SentAt, msg.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert outbound message: %w", err)
+	}
+
+	// Update conversation
+	_, _ = r.db.Exec(ctx, `
+		UPDATE conversations
+		SET last_message_at = $1, last_message_preview = $2, message_count = message_count + 1
+		WHERE id = $3
+	`, now, truncate(payload.Content, 100), conv.ID)
+
+	// Update contact stats
+	_, _ = r.db.Exec(ctx, `
+		UPDATE contacts SET last_message_at = $1, message_count = message_count + 1 WHERE id = $2
+	`, now, contact.ID)
+
+	// Queue GHL sync
+	syncPayload, _ := json.Marshal(map[string]string{
+		"message_id": msg.ID.String(),
+		"account_id": pn.AccountID.String(),
+	})
+	task := asynq.NewTask(TaskSyncToGHL, syncPayload, asynq.MaxRetry(3))
+	_, _ = r.asynq.Enqueue(task)
+
+	return nil
+}
+
 func (r *Router) upsertContact(ctx context.Context, accountID, phoneNumberID uuid.UUID, address string) (*models.Contact, error) {
 	var c models.Contact
 	err := r.db.QueryRow(ctx, `

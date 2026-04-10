@@ -35,7 +35,7 @@ func (p *Provisioner) GenerateOAuthURL(accountID uuid.UUID) string {
 		AuthURL,
 		redirectURI,
 		p.client.clientID,
-		"contacts.readonly contacts.write conversations.readonly conversations.write locations.readonly",
+		"contacts.readonly contacts.write conversations.readonly conversations.write conversations/message.readonly conversations/message.write locations.readonly",
 		accountID.String(),
 	)
 }
@@ -62,12 +62,13 @@ func (p *Provisioner) CompleteOAuth(ctx context.Context, accountID uuid.UUID, co
 	_, err = p.db.Exec(ctx, `
 		INSERT INTO ghl_connections (id, account_id, location_id, access_token, refresh_token,
 		                              token_expires_at, connected, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8)
 		ON CONFLICT (account_id) DO UPDATE
 		SET location_id = EXCLUDED.location_id,
 		    access_token = EXCLUDED.access_token,
 		    refresh_token = EXCLUDED.refresh_token,
 		    token_expires_at = EXCLUDED.token_expires_at,
+		    connected = true,
 		    updated_at = NOW()
 	`, conn.ID, conn.AccountID, conn.LocationID, conn.AccessToken, conn.RefreshToken,
 		conn.TokenExpiresAt, conn.CreatedAt, conn.UpdatedAt)

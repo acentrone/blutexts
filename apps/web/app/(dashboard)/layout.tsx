@@ -32,7 +32,39 @@ export default function DashboardLayout({
     const token = localStorage.getItem("access_token");
     if (!token) {
       router.replace("/login");
+      return;
     }
+
+    // Auto-refresh token before it expires (every 10 minutes)
+    async function refreshToken() {
+      const refresh = localStorage.getItem("refresh_token");
+      if (!refresh) return;
+
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refresh }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          localStorage.setItem("access_token", data.access_token);
+          localStorage.setItem("refresh_token", data.refresh_token);
+        } else {
+          // Refresh failed — session expired, log out
+          localStorage.removeItem("access_token");
+          localStorage.removeItem("refresh_token");
+          router.replace("/login");
+        }
+      } catch {
+        // Network error, don't log out — will retry next interval
+      }
+    }
+
+    // Refresh immediately on load, then every 10 minutes
+    refreshToken();
+    const interval = setInterval(refreshToken, 10 * 60 * 1000);
+    return () => clearInterval(interval);
   }, [router]);
 
   function handleLogout() {

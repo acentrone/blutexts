@@ -3,6 +3,7 @@ package ghl
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bluesend/api/internal/models"
@@ -118,10 +119,9 @@ func (s *Syncer) SyncMessageToGHL(ctx context.Context, messageID, accountID uuid
 	}
 
 	ghlMsg, err := s.client.SendConversationMessage(ctx, conn.AccessToken, &SendMessageRequest{
-		Type:           "Custom",
-		ConversationID: *conv.GHLConversationID,
-		Message:        msg.Content,
-		Direction:      direction,
+		Type:      "SMS",
+		ContactID: *contact.GHLContactID,
+		Message:   msg.Content,
 	})
 	if err != nil {
 		return fmt.Errorf("send to GHL: %w", err)
@@ -178,6 +178,15 @@ func (s *Syncer) SyncContactToGHL(ctx context.Context, contactID, accountID uuid
 
 	ghlContact, err := s.client.CreateContact(ctx, conn.AccessToken, req)
 	if err != nil {
+		// Handle duplicate contact — extract existing ID from error
+		errStr := err.Error()
+		if strings.Contains(errStr, "duplicated contacts") || strings.Contains(errStr, "contactId") {
+			existingID := extractContactIDFromError(errStr)
+			if existingID != "" {
+				_, _ = s.db.Exec(ctx, `UPDATE contacts SET ghl_contact_id = $1 WHERE id = $2`, existingID, contact.ID)
+				return nil
+			}
+		}
 		return fmt.Errorf("create GHL contact: %w", err)
 	}
 
@@ -186,6 +195,22 @@ func (s *Syncer) SyncContactToGHL(ctx context.Context, contactID, accountID uuid
 	`, ghlContact.ID, contact.ID)
 
 	return nil
+}
+
+// extractContactIDFromError parses the existing contact ID from a GHL duplicate error.
+func extractContactIDFromError(errStr string) string {
+	// Error format: ...\"contactId\":\"arbYr9z6c29sSWEYMyH2\"...
+	marker := "\"contactId\":\""
+	idx := strings.Index(errStr, marker)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(marker)
+	end := strings.Index(errStr[start:], "\"")
+	if end < 0 {
+		return ""
+	}
+	return errStr[start : start+end]
 }
 
 // HandleInboundGHLMessage processes a message sent from GHL to be delivered via iMessage.

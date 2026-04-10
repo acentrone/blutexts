@@ -130,6 +130,13 @@ export default function DashboardPage() {
   const account = meData?.account;
   const isSettingUp = account?.status === "setting_up" || account?.status === "pending";
 
+  // Check GHL connection status
+  const { data: ghlStatus } = useSWR(
+    account ? `${API}/api/integration/status?account_id=${account.id}` : null,
+    fetcher
+  );
+  const ghlConnected = ghlStatus?.connected === true;
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -176,17 +183,13 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* GHL connection banner */}
-      {account?.status === "active" && !account?.setup_complete && (
+      {/* GHL connection status */}
+      {account?.status === "active" && !ghlConnected && (
         <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 flex items-start gap-4">
           <AlertCircleIcon className="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 mb-1">
-              Connect Go High Level
-            </h3>
-            <p className="text-sm text-gray-600 mb-3">
-              Connect your GHL account to enable bidirectional message sync.
-            </p>
+            <h3 className="font-semibold text-gray-900 mb-1">Connect Go High Level</h3>
+            <p className="text-sm text-gray-600 mb-3">Connect your GHL account to enable bidirectional message sync.</p>
             <button
               onClick={async () => {
                 const token = localStorage.getItem("access_token");
@@ -202,6 +205,31 @@ export default function DashboardPage() {
               <ExternalLinkIcon className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+      )}
+
+      {account?.status === "active" && ghlConnected && (
+        <div className="bg-green-50 border border-green-100 rounded-2xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <CheckCircle2Icon className="w-5 h-5 text-green-600" />
+            <div>
+              <div className="text-sm font-medium text-green-800">Go High Level connected</div>
+              {ghlStatus?.location_id && <div className="text-xs text-green-600">Location: {ghlStatus.location_id}</div>}
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              const token = localStorage.getItem("access_token");
+              await fetch(`${API}/api/integration/disconnect?account_id=${account.id}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              window.location.reload();
+            }}
+            className="text-xs text-red-500 hover:underline"
+          >
+            Disconnect
+          </button>
         </div>
       )}
 

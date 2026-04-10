@@ -50,6 +50,26 @@ export default function AdminLayout({
         }
       })
       .catch(() => setStatus("no_token"));
+
+    // Auto-refresh token every 10 minutes
+    const interval = setInterval(async () => {
+      const refresh = localStorage.getItem("refresh_token");
+      if (!refresh) return;
+      try {
+        const res = await fetch(`${API}/api/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refresh }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          localStorage.setItem("access_token", data.access_token);
+          localStorage.setItem("refresh_token", data.refresh_token);
+        }
+      } catch {}
+    }, 10 * 60 * 1000);
+
+    return () => clearInterval(interval);
   }, []);
 
   if (status === "checking") {

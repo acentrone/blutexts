@@ -68,8 +68,9 @@ func (c *Client) RefreshAccessToken(ctx context.Context, refreshToken string) (*
 }
 
 func (c *Client) exchangeToken(ctx context.Context, data url.Values) (*TokenResponse, error) {
+	// GHL token endpoint is on the services domain, not the marketplace domain
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		AuthURL+"/oauth/token",
+		BaseURL+"/oauth/token",
 		strings.NewReader(data.Encode()),
 	)
 	if err != nil {
@@ -184,9 +185,10 @@ func (c *Client) GetOrCreateConversation(ctx context.Context, accessToken, locat
 
 type SendMessageRequest struct {
 	Type           string `json:"type"`
-	ConversationID string `json:"conversationId"`
+	ContactID      string `json:"contactId"`
+	ConversationID string `json:"conversationId,omitempty"`
 	Message        string `json:"message"`
-	Direction      string `json:"direction"`
+	Direction      string `json:"direction,omitempty"`
 }
 
 type SendMessageResponse struct {

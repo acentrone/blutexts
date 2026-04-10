@@ -7,7 +7,7 @@ import (
 	"syscall"
 
 	"github.com/bluesend/device-agent/internal/config"
-	agentSync "github.com/bluesend/device-agent/internal/sync"
+	agentSync "github.com/bluesend/device-agent/pkg/agent"
 )
 
 func main() {

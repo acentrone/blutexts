@@ -76,6 +76,8 @@ func (h *DeviceHandler) processDeviceEvents() {
 		switch event.Event.Type {
 		case models.DeviceEventInboundMessage:
 			h.handleInboundMessage(event)
+		case models.DeviceEventOutboundMessage:
+			h.handleOutboundMessage(event)
 		case models.DeviceEventMessageStatus:
 			h.handleMessageStatus(event)
 		case models.DeviceEventHeartbeat:
@@ -104,6 +106,35 @@ func (h *DeviceHandler) handleInboundMessage(event ws.InboundEvent) {
 	err = h.db.QueryRow(context.Background(), `
 		SELECT account_id FROM phone_numbers WHERE number = $1 OR imessage_address = $1
 	`, payload.ToAddress).Scan(&accountID)
+	if err == nil {
+		h.clientHub.BroadcastToAccount(accountID, models.WSEvent{
+			Type:    models.WSEventNewMessage,
+			Payload: payload,
+		})
+	}
+}
+
+func (h *DeviceHandler) handleOutboundMessage(event ws.InboundEvent) {
+	payloadBytes, err := json.Marshal(event.Event.Payload)
+	if err != nil {
+		return
+	}
+	var payload models.DeviceInboundPayload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		log.Printf("invalid outbound message payload from device %s: %v", event.DeviceID, err)
+		return
+	}
+
+	if err := h.msgRouter.HandleOutbound(context.Background(), payload); err != nil {
+		log.Printf("handle outbound error from device %s: %v", event.DeviceID, err)
+		return
+	}
+
+	// Notify web dashboard
+	var accountID uuid.UUID
+	err = h.db.QueryRow(context.Background(), `
+		SELECT account_id FROM phone_numbers WHERE number = $1 OR imessage_address = $1
+	`, payload.FromAddress).Scan(&accountID)
 	if err == nil {
 		h.clientHub.BroadcastToAccount(accountID, models.WSEvent{
 			Type:    models.WSEventNewMessage,

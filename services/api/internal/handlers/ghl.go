@@ -133,6 +133,20 @@ func (h *GHLHandler) handleOutboundFromGHL(locationID string, data map[string]in
 	}
 }
 
+// DELETE /api/integration/disconnect — disconnect GHL for current account
+func (h *GHLHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
+	accountIDStr := r.URL.Query().Get("account_id")
+	if accountIDStr == "" {
+		writeError(w, "account_id required", http.StatusBadRequest)
+		return
+	}
+
+	h.db.Exec(r.Context(), `DELETE FROM ghl_connections WHERE account_id = $1`, accountIDStr)
+	h.db.Exec(r.Context(), `UPDATE accounts SET ghl_location_id = NULL WHERE id = $1`, accountIDStr)
+
+	writeJSON(w, map[string]string{"status": "disconnected"}, http.StatusOK)
+}
+
 // GET /api/integration/status — check connection status for current account
 func (h *GHLHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	accountIDStr := r.URL.Query().Get("account_id")

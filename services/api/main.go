@@ -134,6 +134,34 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// ── Agent version check (public, no auth) ────────────────
+	r.Get("/api/agent/version", func(w http.ResponseWriter, r *http.Request) {
+		current := r.URL.Query().Get("current")
+
+		// Read latest version from DB (or hardcode for now)
+		var version, downloadURL, notes string
+		var required bool
+		err := pool.QueryRow(r.Context(), `
+			SELECT version, download_url, notes, required
+			FROM agent_releases
+			WHERE active = true
+			ORDER BY created_at DESC LIMIT 1
+		`).Scan(&version, &downloadURL, &notes, &required)
+		if err != nil || version == "" || version == current {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{}`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"version":      version,
+			"download_url": downloadURL,
+			"notes":        notes,
+			"required":     required,
+		})
+	})
+
 	// ── Auth ──────────────────────────────────────────────────
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/register", authHandler.Register)
@@ -160,6 +188,7 @@ func main() {
 
 		r.Get("/oauth/connect", ghlHandler.InitiateOAuth)
 		r.Get("/integration/status", ghlHandler.GetStatus)
+		r.Delete("/integration/disconnect", ghlHandler.Disconnect)
 
 		r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 			accountID, ok := middleware.GetAccountID(r.Context())
@@ -186,6 +215,9 @@ func main() {
 		r.Get("/stats", adminHandler.GetSystemStats)
 		r.Get("/accounts", adminHandler.ListAccounts)
 		r.Patch("/accounts/{accountID}/status", adminHandler.UpdateAccountStatus)
+		r.Get("/accounts/{accountID}/numbers", adminHandler.GetAccountNumbers)
+		r.Get("/accounts/{accountID}/ghl", adminHandler.GetAccountGHL)
+		r.Delete("/accounts/{accountID}/ghl", adminHandler.DisconnectAccountGHL)
 		r.Post("/accounts/{accountID}/assign-number", adminHandler.AssignPhoneNumber)
 		r.Get("/devices", adminHandler.ListDevices)
 		r.Post("/devices/register", adminHandler.RegisterDevice)
@@ -245,7 +277,12 @@ func startWorker(redisOpts asynq.RedisClientOpt, syncer *ghl.Syncer) {
 		if err != nil {
 			return fmt.Errorf("invalid account_id: %w", err)
 		}
-		return syncer.SyncMessageToGHL(ctx, msgID, accountID)
+		if err := syncer.SyncMessageToGHL(ctx, msgID, accountID); err != nil {
+			log.Printf("GHL sync error for message %s: %v", msgID, err)
+			return err
+		}
+		log.Printf("GHL sync success for message %s", msgID)
+		return nil
 	})
 
 	mux.HandleFunc(messaging.TaskSyncContact, func(ctx context.Context, task *asynq.Task) error {
