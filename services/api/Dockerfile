@@ -1,19 +1,13 @@
-FROM golang:1.22-alpine AS base
+FROM golang:1.23-alpine AS base
 WORKDIR /app
 RUN apk add --no-cache git ca-certificates
 
-FROM base AS development
-RUN go install github.com/air-verse/air@latest
-COPY go.mod go.sum* ./
-RUN go mod download
-CMD ["air", "-c", ".air.toml"]
-
 FROM base AS builder
-COPY go.mod go.sum* ./
+COPY go.mod ./
 RUN go mod download || true
-ARG CACHEBUST=1
 COPY . .
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /bin/api .
+RUN go mod tidy
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /bin/api .
 
 FROM alpine:3.20 AS production
 RUN apk add --no-cache ca-certificates postgresql16-client
