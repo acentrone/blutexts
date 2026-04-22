@@ -6,24 +6,25 @@ import (
 	"time"
 
 	"github.com/bluesend/api/internal/models"
+	"github.com/bluesend/api/internal/services/crypto"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Provisioner handles creating a full GHL sub-account integration after signup.
+// Provisioner handles GHL OAuth and connection persistence.
 type Provisioner struct {
-	db         *pgxpool.Pool
-	client     *Client
-	appURL     string
-	webhookURL string
+	db     *pgxpool.Pool
+	client *Client
+	appURL string
+	enc    *crypto.Encryptor
 }
 
-func NewProvisioner(db *pgxpool.Pool, client *Client, appURL string) *Provisioner {
+func NewProvisioner(db *pgxpool.Pool, client *Client, appURL string, enc *crypto.Encryptor) *Provisioner {
 	return &Provisioner{
-		db:         db,
-		client:     client,
-		appURL:     appURL,
-		webhookURL: appURL + "/api/webhooks/inbound",
+		db:     db,
+		client: client,
+		appURL: appURL,
+		enc:    enc,
 	}
 }
 
@@ -41,6 +42,8 @@ func (p *Provisioner) GenerateOAuthURL(accountID uuid.UUID) string {
 }
 
 // CompleteOAuth exchanges the authorization code and persists the connection.
+// Inbound messages flow through the conversation provider's delivery URL
+// (configured in the GHL marketplace app settings), not through registered webhooks.
 func (p *Provisioner) CompleteOAuth(ctx context.Context, accountID uuid.UUID, code, redirectURI string) (*models.GHLConnection, error) {
 	tr, err := p.client.ExchangeCode(ctx, code, redirectURI)
 	if err != nil {
@@ -54,9 +57,20 @@ func (p *Provisioner) CompleteOAuth(ctx context.Context, accountID uuid.UUID, co
 		AccessToken:    tr.AccessToken,
 		RefreshToken:   tr.RefreshToken,
 		TokenExpiresAt: time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
-		Connected:      false, // will be set to true after webhook registration
+		Connected:      true,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
+	}
+
+	// Encrypt OAuth tokens at rest. A read-only DB compromise should not
+	// hand an attacker control of every customer's GHL location.
+	encAccess, err := p.enc.Encrypt(conn.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt access_token: %w", err)
+	}
+	encRefresh, err := p.enc.Encrypt(conn.RefreshToken)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt refresh_token: %w", err)
 	}
 
 	_, err = p.db.Exec(ctx, `
@@ -70,45 +84,16 @@ func (p *Provisioner) CompleteOAuth(ctx context.Context, accountID uuid.UUID, co
 		    token_expires_at = EXCLUDED.token_expires_at,
 		    connected = true,
 		    updated_at = NOW()
-	`, conn.ID, conn.AccountID, conn.LocationID, conn.AccessToken, conn.RefreshToken,
+	`, conn.ID, conn.AccountID, conn.LocationID, encAccess, encRefresh,
 		conn.TokenExpiresAt, conn.CreatedAt, conn.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("save ghl connection: %w", err)
 	}
 
-	// Also update accounts table
+	// Update account's GHL location reference
 	_, _ = p.db.Exec(ctx, `
 		UPDATE accounts SET ghl_location_id = $1 WHERE id = $2
 	`, conn.LocationID, accountID)
 
-	// Register webhook asynchronously (non-blocking for OAuth callback)
-	go func() {
-		bgCtx := context.Background()
-		if err := p.RegisterWebhook(bgCtx, accountID); err != nil {
-			fmt.Printf("ERROR registering GHL webhook for account %s: %v\n", accountID, err)
-		}
-	}()
-
 	return conn, nil
-}
-
-// RegisterWebhook registers our webhook with GHL for this location.
-func (p *Provisioner) RegisterWebhook(ctx context.Context, accountID uuid.UUID) error {
-	syncer := NewSyncer(p.db, p.client)
-	conn, err := syncer.getConnection(ctx, accountID)
-	if err != nil {
-		return err
-	}
-
-	webhook, err := p.client.RegisterWebhook(ctx, conn.AccessToken, conn.LocationID, p.webhookURL)
-	if err != nil {
-		return fmt.Errorf("register webhook: %w", err)
-	}
-
-	_, err = p.db.Exec(ctx, `
-		UPDATE ghl_connections
-		SET webhook_id = $1, connected = true, updated_at = NOW()
-		WHERE id = $2
-	`, webhook.ID, conn.ID)
-	return err
 }

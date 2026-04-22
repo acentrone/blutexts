@@ -141,3 +141,9 @@ func GetAccountID(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(ContextKeyAccountID).(uuid.UUID)
 	return id, ok
 }
+
+// GetRole extracts the user role from context.
+func GetRole(ctx context.Context) (string, bool) {
+	role, ok := ctx.Value(ContextKeyUserRole).(string)
+	return role, ok
+}

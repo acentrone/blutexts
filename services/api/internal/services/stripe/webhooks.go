@@ -120,10 +120,14 @@ func (h *WebhookHandler) handleCheckoutCompleted(ctx context.Context, event stri
 		}
 	}
 
+	// Clear any cancellation lifecycle fields in case this is a re-subscription
+	// after a prior cancellation.
 	_, err = h.db.Exec(ctx, `
 		UPDATE accounts
 		SET status = 'setting_up', plan = $1, setup_fee_paid = true,
-		    stripe_subscription_id = $2, updated_at = NOW()
+		    stripe_subscription_id = $2,
+		    cancelled_at = NULL, grace_period_ends_at = NULL, auto_reply_starts_at = NULL,
+		    updated_at = NOW()
 		WHERE id = $3
 	`, plan, sess.Subscription.ID, accountID)
 	if err != nil {
@@ -192,11 +196,35 @@ func (h *WebhookHandler) handleSubscriptionDeleted(ctx context.Context, event st
 		return err
 	}
 
-	_, err := h.db.Exec(ctx, `
-		UPDATE accounts SET status = 'cancelled', updated_at = $1
-		WHERE stripe_subscription_id = $2
-	`, time.Now(), sub.ID)
-	return err
+	now := time.Now()
+	gracePeriodEnds := now.Add(30 * 24 * time.Hour)
+	autoReplyStarts := now.Add(7 * 24 * time.Hour)
+
+	// Trigger the full cancellation lifecycle: 30-day grace period,
+	// auto-reply after 7 days, phone numbers suspended.
+	var accountID uuid.UUID
+	err := h.db.QueryRow(ctx, `
+		UPDATE accounts
+		SET status = 'cancelled',
+		    cancelled_at = $1,
+		    grace_period_ends_at = $2,
+		    auto_reply_starts_at = $3,
+		    updated_at = $1
+		WHERE stripe_subscription_id = $4
+		RETURNING id
+	`, now, gracePeriodEnds, autoReplyStarts, sub.ID).Scan(&accountID)
+	if err != nil {
+		return err
+	}
+
+	// Suspend phone numbers — blocks outbound, inbound still flows for auto-reply
+	_, _ = h.db.Exec(ctx, `
+		UPDATE phone_numbers SET status = 'suspended', updated_at = NOW()
+		WHERE account_id = $1 AND status = 'active'
+	`, accountID)
+
+	fmt.Printf("Subscription deleted for account %s — 30-day grace period started\n", accountID)
+	return nil
 }
 
 func (h *WebhookHandler) handleSubscriptionUpdated(ctx context.Context, event stripeLib.Event) error {

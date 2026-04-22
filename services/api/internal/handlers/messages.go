@@ -1,24 +1,240 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/bluesend/api/internal/middleware"
 	"github.com/bluesend/api/internal/models"
 	"github.com/bluesend/api/internal/services/messaging"
+	"github.com/bluesend/api/internal/services/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type MessageHandler struct {
-	db     *pgxpool.Pool
-	router *messaging.Router
+	db      *pgxpool.Pool
+	router  *messaging.Router
+	storage *storage.R2Client
 }
 
-func NewMessageHandler(db *pgxpool.Pool, router *messaging.Router) *MessageHandler {
-	return &MessageHandler{db: db, router: router}
+func NewMessageHandler(db *pgxpool.Pool, router *messaging.Router, r2 *storage.R2Client) *MessageHandler {
+	return &MessageHandler{db: db, router: router, storage: r2}
+}
+
+// POST /api/messages/upload — accepts multipart file upload, stores in R2, returns URL
+func (h *MessageHandler) Upload(w http.ResponseWriter, r *http.Request) {
+	if h.storage == nil {
+		writeError(w, "media uploads are not configured on this server", http.StatusServiceUnavailable)
+		return
+	}
+
+	// 100MB hard cap (videos). Per-type limits enforced after we read content type below.
+	const maxImageSize = 25 << 20  // 25 MB
+	const maxVideoSize = 100 << 20 // 100 MB
+	const maxAudioSize = 25 << 20  // 25 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxVideoSize)
+	if err := r.ParseMultipartForm(maxVideoSize); err != nil {
+		writeError(w, "file too large or invalid multipart", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, "file field required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeError(w, "could not read file", http.StatusBadRequest)
+		return
+	}
+
+	contentType := header.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Validate supported types
+	if !isSupportedMediaType(contentType) {
+		writeError(w, "unsupported file type: "+contentType, http.StatusBadRequest)
+		return
+	}
+
+	// Per-type size validation
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		if int64(len(data)) > maxImageSize {
+			writeError(w, "image exceeds 25MB limit", http.StatusBadRequest)
+			return
+		}
+	case strings.HasPrefix(contentType, "video/"):
+		if int64(len(data)) > maxVideoSize {
+			writeError(w, "video exceeds 100MB limit", http.StatusBadRequest)
+			return
+		}
+	case strings.HasPrefix(contentType, "audio/"):
+		if int64(len(data)) > maxAudioSize {
+			writeError(w, "audio exceeds 25MB limit", http.StatusBadRequest)
+			return
+		}
+	}
+
+	filename := header.Filename
+	size := header.Size
+	originalData := data
+	originalContentType := contentType
+	originalFilename := filename
+	webURL := "" // Browser-playable URL (set for audio conversions)
+
+	// Voice memos: convert browser-recorded webm/ogg → Opus-in-CAF at 24kHz mono.
+	// CAF is the format iMessage uses for native voice messages. Browsers can't
+	// play CAF, so we upload BOTH the original webm (for web playback) and the
+	// converted CAF (for iMessage delivery).
+	if strings.HasPrefix(contentType, "audio/webm") || strings.HasPrefix(contentType, "audio/ogg") {
+		// Upload the original webm first (for browser playback)
+		log.Printf("upload: storing original %s (%d bytes) for web playback", contentType, len(data))
+		origURL, err := h.storage.Upload(r.Context(), originalData, originalContentType, originalFilename)
+		if err != nil {
+			log.Printf("upload: original webm upload failed: %v", err)
+		} else {
+			webURL = origURL
+		}
+
+		// Convert to CAF for iMessage
+		log.Printf("upload: converting %s (%d bytes) to Opus@24k CAF", contentType, len(data))
+		converted, err := convertToOpusCAF(data)
+		if err != nil {
+			log.Printf("upload: Opus CAF conversion FAILED: %v — using original", err)
+		} else {
+			data = converted
+			contentType = "audio/x-caf"
+			base := filename
+			for _, ext := range []string{".webm", ".ogg", ".opus"} {
+				base = strings.TrimSuffix(base, ext)
+			}
+			filename = base + ".caf"
+			size = int64(len(data))
+			log.Printf("upload: converted to Opus CAF (%d bytes) filename=%s", size, filename)
+		}
+	}
+
+	url, err := h.storage.Upload(r.Context(), data, contentType, filename)
+	if err != nil {
+		writeError(w, "upload failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, models.Attachment{
+		URL:      url,
+		Type:     contentType,
+		Filename: filename,
+		Size:     size,
+		WebURL:   webURL,
+	}, http.StatusOK)
+}
+
+// convertToOpusCAF converts arbitrary audio input (webm/opus/ogg) to the
+// exact format iOS voice memos use: Opus codec in a CAF container at
+// 24000 Hz mono. This matches what Sendblue and LoopMessage require, and
+// what iPhones produce when you tap-and-hold the mic in Messages.app.
+// Captures ffmpeg stderr so conversion failures surface in logs.
+func convertToOpusCAF(input []byte) ([]byte, error) {
+	inFile, err := os.CreateTemp("", "audio-in-*.webm")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(inFile.Name())
+	if _, err := inFile.Write(input); err != nil {
+		inFile.Close()
+		return nil, err
+	}
+	inFile.Close()
+
+	outPath := inFile.Name() + ".caf"
+	defer os.Remove(outPath)
+
+	cmd := exec.Command("ffmpeg",
+		"-y",
+		"-i", inFile.Name(),
+		"-c:a", "libopus",
+		"-b:a", "24k",
+		"-ar", "24000",
+		"-ac", "1",
+		"-f", "caf",
+		outPath,
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffmpeg: %w — %s", err, stderr.String())
+	}
+
+	return os.ReadFile(outPath)
+}
+
+func isSupportedMediaType(ct string) bool {
+	ct = strings.ToLower(ct)
+	allowed := []string{
+		"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/heic",
+		"video/mp4", "video/quicktime", "video/mov",
+		"audio/m4a", "audio/mp4", "audio/mpeg", "audio/webm", "audio/ogg", "audio/x-m4a",
+	}
+	for _, a := range allowed {
+		if strings.HasPrefix(ct, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// ConvertCAFToMP3 transcodes a native iMessage voice-message .caf (Opus@24k
+// in a CAF container) into mp3 so browsers and GHL can play / accept it.
+// Both Apple Mail and the Chrome <audio> element refuse to decode CAF, and
+// GHL's media uploads only accept a small whitelist (mp3 is the safest
+// audio choice). Exposed for use by the device upload handler on inbound
+// voice messages.
+func ConvertCAFToMP3(input []byte) ([]byte, error) {
+	inFile, err := os.CreateTemp("", "voice-in-*.caf")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(inFile.Name())
+	if _, err := inFile.Write(input); err != nil {
+		inFile.Close()
+		return nil, err
+	}
+	inFile.Close()
+
+	outPath := inFile.Name() + ".mp3"
+	defer os.Remove(outPath)
+
+	cmd := exec.Command("ffmpeg",
+		"-y",
+		"-i", inFile.Name(),
+		"-c:a", "libmp3lame",
+		"-q:a", "5", // ~130 kbps VBR — speech-quality
+		"-ac", "1",
+		"-ar", "24000",
+		outPath,
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffmpeg caf→mp3: %w — %s", err, stderr.String())
+	}
+
+	return os.ReadFile(outPath)
 }
 
 // POST /api/messages/send
@@ -34,8 +250,12 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Content == "" || req.ToAddress == "" || req.PhoneNumberID == "" {
-		writeError(w, "phone_number_id, to_address, and content are required", http.StatusBadRequest)
+	if req.ToAddress == "" || req.PhoneNumberID == "" {
+		writeError(w, "phone_number_id and to_address are required", http.StatusBadRequest)
+		return
+	}
+	if req.Content == "" && len(req.Attachments) == 0 {
+		writeError(w, "content or attachments required", http.StatusBadRequest)
 		return
 	}
 	if len(req.Content) > 5000 {
@@ -75,7 +295,7 @@ func (h *MessageHandler) ListConversations(w http.ResponseWriter, r *http.Reques
 	rows, err := h.db.Query(r.Context(), `
 		SELECT c.id, c.phone_number_id, c.contact_id, c.ghl_conversation_id,
 		       c.last_message_at, c.last_message_preview, c.message_count, c.unread_count, c.status,
-		       ct.imessage_address, ct.name,
+		       ct.imessage_address, ct.name, ct.imessage_capable,
 		       pn.number, pn.display_name
 		FROM conversations c
 		JOIN contacts ct ON ct.id = c.contact_id
@@ -92,10 +312,11 @@ func (h *MessageHandler) ListConversations(w http.ResponseWriter, r *http.Reques
 
 	type ConversationRow struct {
 		models.Conversation
-		ContactAddress  string  `json:"contact_address"`
-		ContactName     *string `json:"contact_name"`
-		PhoneNumber     string  `json:"phone_number"`
-		PhoneDisplayName *string `json:"phone_display_name"`
+		ContactAddress         string  `json:"contact_address"`
+		ContactName            *string `json:"contact_name"`
+		ContactIMessageCapable *bool   `json:"contact_imessage_capable"`
+		PhoneNumber            string  `json:"phone_number"`
+		PhoneDisplayName       *string `json:"phone_display_name"`
 	}
 
 	var conversations []ConversationRow
@@ -104,7 +325,7 @@ func (h *MessageHandler) ListConversations(w http.ResponseWriter, r *http.Reques
 		if err := rows.Scan(
 			&c.ID, &c.PhoneNumberID, &c.ContactID, &c.GHLConversationID,
 			&c.LastMessageAt, &c.LastMessagePreview, &c.MessageCount, &c.UnreadCount, &c.Status,
-			&c.ContactAddress, &c.ContactName,
+			&c.ContactAddress, &c.ContactName, &c.ContactIMessageCapable,
 			&c.PhoneNumber, &c.PhoneDisplayName,
 		); err != nil {
 			continue
@@ -138,8 +359,8 @@ func (h *MessageHandler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	before := r.URL.Query().Get("before") // cursor-based pagination
 
 	query := `
-		SELECT id, conversation_id, direction, content, imessage_guid,
-		       status, sent_at, delivered_at, read_at, failed_at, error_message, created_at
+		SELECT id, conversation_id, direction, content, attachments, imessage_guid,
+		       status, sent_at, delivered_at, read_at, failed_at, error_message, service, created_at
 		FROM messages
 		WHERE conversation_id = $1 AND account_id = $2
 	`
@@ -162,11 +383,15 @@ func (h *MessageHandler) GetMessages(w http.ResponseWriter, r *http.Request) {
 	var messages []models.Message
 	for rows.Next() {
 		var m models.Message
+		var attachmentsJSON []byte
 		if err := rows.Scan(
-			&m.ID, &m.ConversationID, &m.Direction, &m.Content, &m.IMessageGUID,
-			&m.Status, &m.SentAt, &m.DeliveredAt, &m.ReadAt, &m.FailedAt, &m.ErrorMessage, &m.CreatedAt,
+			&m.ID, &m.ConversationID, &m.Direction, &m.Content, &attachmentsJSON, &m.IMessageGUID,
+			&m.Status, &m.SentAt, &m.DeliveredAt, &m.ReadAt, &m.FailedAt, &m.ErrorMessage, &m.Service, &m.CreatedAt,
 		); err != nil {
 			continue
+		}
+		if len(attachmentsJSON) > 0 {
+			_ = json.Unmarshal(attachmentsJSON, &m.Attachments)
 		}
 		messages = append(messages, m)
 	}
@@ -235,6 +460,56 @@ func (h *MessageHandler) GetDashboardStats(w http.ResponseWriter, r *http.Reques
 	`, accountID).Scan(&stats.DailyLimit)
 
 	writeJSON(w, stats, http.StatusOK)
+}
+
+// GET /api/account/info — returns phone number, device status, and setup info for the user's dashboard
+func (h *MessageHandler) GetAccountInfo(w http.ResponseWriter, r *http.Request) {
+	accountID, _ := middleware.GetAccountID(r.Context())
+
+	type PhoneInfo struct {
+		ID              string  `json:"id"`
+		Number          string  `json:"number"`
+		IMessageAddress *string `json:"imessage_address"`
+		DisplayName     *string `json:"display_name"`
+		Status          string  `json:"status"`
+		DeviceName      *string `json:"device_name"`
+		DeviceStatus    *string `json:"device_status"`
+		DeviceLastSeen  *string `json:"device_last_seen"`
+	}
+
+	var info PhoneInfo
+	var voiceEnabled bool
+	err := h.db.QueryRow(r.Context(), `
+		SELECT pn.id::text, pn.number, pn.imessage_address, pn.display_name, pn.status,
+		       d.name, d.status, d.last_seen_at::text, pn.voice_enabled
+		FROM phone_numbers pn
+		LEFT JOIN devices d ON d.id = pn.device_id
+		WHERE pn.account_id = $1 AND pn.status = 'active'
+		LIMIT 1
+	`, accountID).Scan(
+		&info.ID, &info.Number, &info.IMessageAddress, &info.DisplayName, &info.Status,
+		&info.DeviceName, &info.DeviceStatus, &info.DeviceLastSeen, &voiceEnabled,
+	)
+
+	var callingEnabled bool
+	h.db.QueryRow(r.Context(),
+		`SELECT calling_enabled FROM accounts WHERE id = $1`, accountID,
+	).Scan(&callingEnabled)
+
+	if err != nil {
+		// No phone number assigned yet
+		writeJSON(w, map[string]interface{}{
+			"has_number":      false,
+			"calling_enabled": callingEnabled,
+		}, http.StatusOK)
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"has_number":      true,
+		"phone":           info,
+		"calling_enabled": callingEnabled && voiceEnabled,
+	}, http.StatusOK)
 }
 
 // GET /api/messages/export — CSV export

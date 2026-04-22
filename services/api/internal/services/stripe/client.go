@@ -42,6 +42,8 @@ type CreateCheckoutParams struct {
 }
 
 type CheckoutResult struct {
+	URL          string
+	SessionID    string
 	ClientSecret string
 	CustomerID   string
 }
@@ -97,6 +99,8 @@ func (b *BillingService) CreateCheckoutSession(ctx context.Context, params Creat
 	}
 
 	return &CheckoutResult{
+		URL:          sess.URL,
+		SessionID:    sess.ID,
 		ClientSecret: sess.ClientSecret,
 		CustomerID:   cust.ID,
 	}, nil

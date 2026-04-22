@@ -184,11 +184,11 @@ func (c *Client) GetOrCreateConversation(ctx context.Context, accessToken, locat
 // ============================================================
 
 type SendMessageRequest struct {
-	Type           string `json:"type"`
-	ContactID      string `json:"contactId"`
-	ConversationID string `json:"conversationId,omitempty"`
-	Message        string `json:"message"`
-	Direction      string `json:"direction,omitempty"`
+	Type                   string   `json:"type"`
+	ContactID              string   `json:"contactId"`
+	ConversationProviderId string   `json:"conversationProviderId,omitempty"`
+	Message                string   `json:"message"`
+	Attachments            []string `json:"attachments,omitempty"`
 }
 
 type SendMessageResponse struct {
@@ -201,30 +201,11 @@ func (c *Client) SendConversationMessage(ctx context.Context, accessToken string
 	return &result, err
 }
 
-// ============================================================
-// Webhooks Registration
-// ============================================================
-
-type WebhookSubscription struct {
-	ID         string   `json:"id"`
-	LocationID string   `json:"locationId"`
-	Events     []string `json:"events"`
-	URL        string   `json:"url"`
-}
-
-func (c *Client) RegisterWebhook(ctx context.Context, accessToken, locationID, webhookURL string) (*WebhookSubscription, error) {
-	req := map[string]interface{}{
-		"locationId": locationID,
-		"url":        webhookURL,
-		"events": []string{
-			"InboundMessage",
-			"ConversationProviderOutboundMessage",
-			"ContactCreate",
-			"ContactUpdate",
-		},
-	}
-	var result WebhookSubscription
-	err := c.post(ctx, accessToken, "/webhooks/", req, &result)
+// LogInboundMessage logs an inbound message (received from a contact) into GHL
+// via the custom conversation provider inbound endpoint.
+func (c *Client) LogInboundMessage(ctx context.Context, accessToken string, req *SendMessageRequest) (*SendMessageResponse, error) {
+	var result SendMessageResponse
+	err := c.post(ctx, accessToken, "/conversations/messages/inbound", req, &result)
 	return &result, err
 }
 

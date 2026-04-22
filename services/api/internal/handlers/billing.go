@@ -56,6 +56,8 @@ func (h *BillingHandler) CreateCheckout(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, models.CreateCheckoutResponse{
+		URL:          result.URL,
+		SessionID:    result.SessionID,
 		ClientSecret: result.ClientSecret,
 		CustomerID:   result.CustomerID,
 	}, http.StatusOK)

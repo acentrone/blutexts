@@ -2,11 +2,14 @@ package ghl
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/bluesend/api/internal/models"
+	"github.com/bluesend/api/internal/services/crypto"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -15,25 +18,35 @@ import (
 type Syncer struct {
 	db     *pgxpool.Pool
 	client *Client
+	enc    *crypto.Encryptor
 }
 
-func NewSyncer(db *pgxpool.Pool, client *Client) *Syncer {
-	return &Syncer{db: db, client: client}
+func NewSyncer(db *pgxpool.Pool, client *Client, enc *crypto.Encryptor) *Syncer {
+	return &Syncer{db: db, client: client, enc: enc}
 }
 
 // getConnection retrieves the GHL connection for an account, refreshing token if needed.
+// OAuth tokens are stored encrypted at rest via crypto.Encryptor (envelope-encrypted
+// AES-256-GCM); we decrypt on read and re-encrypt before any UPDATE.
 func (s *Syncer) getConnection(ctx context.Context, accountID uuid.UUID) (*models.GHLConnection, error) {
 	var conn models.GHLConnection
+	var storedAccess, storedRefresh string
 	err := s.db.QueryRow(ctx, `
 		SELECT id, account_id, location_id, access_token, refresh_token,
 		       token_expires_at, pipeline_id, custom_channel_id, webhook_id, connected
 		FROM ghl_connections WHERE account_id = $1
 	`, accountID).Scan(
-		&conn.ID, &conn.AccountID, &conn.LocationID, &conn.AccessToken, &conn.RefreshToken,
+		&conn.ID, &conn.AccountID, &conn.LocationID, &storedAccess, &storedRefresh,
 		&conn.TokenExpiresAt, &conn.PipelineID, &conn.CustomChannelID, &conn.WebhookID, &conn.Connected,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get ghl connection: %w", err)
+	}
+	if conn.AccessToken, err = s.enc.Decrypt(storedAccess); err != nil {
+		return nil, fmt.Errorf("decrypt access_token: %w", err)
+	}
+	if conn.RefreshToken, err = s.enc.Decrypt(storedRefresh); err != nil {
+		return nil, fmt.Errorf("decrypt refresh_token: %w", err)
 	}
 
 	// Refresh token if expiring within 5 minutes
@@ -46,11 +59,13 @@ func (s *Syncer) getConnection(ctx context.Context, accountID uuid.UUID) (*model
 		conn.RefreshToken = tr.RefreshToken
 		conn.TokenExpiresAt = time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second)
 
+		encAccess, _ := s.enc.Encrypt(conn.AccessToken)
+		encRefresh, _ := s.enc.Encrypt(conn.RefreshToken)
 		_, _ = s.db.Exec(ctx, `
 			UPDATE ghl_connections
 			SET access_token = $1, refresh_token = $2, token_expires_at = $3
 			WHERE id = $4
-		`, conn.AccessToken, conn.RefreshToken, conn.TokenExpiresAt, conn.ID)
+		`, encAccess, encRefresh, conn.TokenExpiresAt, conn.ID)
 	}
 
 	return &conn, nil
@@ -60,15 +75,19 @@ func (s *Syncer) getConnection(ctx context.Context, accountID uuid.UUID) (*model
 func (s *Syncer) SyncMessageToGHL(ctx context.Context, messageID, accountID uuid.UUID) error {
 	// Load message
 	var msg models.Message
+	var attachmentsJSON []byte
 	err := s.db.QueryRow(ctx, `
-		SELECT id, conversation_id, contact_id, direction, content, ghl_message_id
+		SELECT id, conversation_id, contact_id, direction, content, attachments, ghl_message_id
 		FROM messages WHERE id = $1 AND account_id = $2
 	`, messageID, accountID).Scan(
 		&msg.ID, &msg.ConversationID, &msg.ContactID,
-		&msg.Direction, &msg.Content, &msg.GHLMessageID,
+		&msg.Direction, &msg.Content, &attachmentsJSON, &msg.GHLMessageID,
 	)
 	if err != nil {
 		return fmt.Errorf("load message: %w", err)
+	}
+	if len(attachmentsJSON) > 0 {
+		_ = json.Unmarshal(attachmentsJSON, &msg.Attachments)
 	}
 
 	// Already synced
@@ -113,16 +132,33 @@ func (s *Syncer) SyncMessageToGHL(ctx context.Context, messageID, accountID uuid
 		conv.GHLConversationID = &ghlConv.ID
 	}
 
-	direction := "outbound"
-	if msg.Direction == models.MessageDirectionInbound {
-		direction = "inbound"
+	providerID := os.Getenv("GHL_CONVERSATION_PROVIDER_ID")
+	if providerID == "" {
+		providerID = "69d8f7bc2b4bdc470dd45f5b"
 	}
 
-	ghlMsg, err := s.client.SendConversationMessage(ctx, conn.AccessToken, &SendMessageRequest{
-		Type:      "SMS",
-		ContactID: *contact.GHLContactID,
-		Message:   msg.Content,
-	})
+	var attachmentURLs []string
+	for _, a := range msg.Attachments {
+		attachmentURLs = append(attachmentURLs, a.URL)
+	}
+
+	msgReq := &SendMessageRequest{
+		Type:                   "Custom",
+		ContactID:              *contact.GHLContactID,
+		Message:                msg.Content,
+		ConversationProviderId: providerID,
+		Attachments:            attachmentURLs,
+	}
+
+	// Inbound messages use the inbound endpoint (no delivery trigger).
+	// Outbound messages use the regular endpoint — GHL fires a delivery webhook back,
+	// but our webhook handler filters `source=api` events to prevent the loop.
+	var ghlMsg *SendMessageResponse
+	if msg.Direction == models.MessageDirectionInbound {
+		ghlMsg, err = s.client.LogInboundMessage(ctx, conn.AccessToken, msgReq)
+	} else {
+		ghlMsg, err = s.client.SendConversationMessage(ctx, conn.AccessToken, msgReq)
+	}
 	if err != nil {
 		return fmt.Errorf("send to GHL: %w", err)
 	}
@@ -160,8 +196,8 @@ func (s *Syncer) SyncContactToGHL(ctx context.Context, contactID, accountID uuid
 
 	req := &CreateContactRequest{
 		LocationID: conn.LocationID,
-		Source:     "BlueSend",
-		Tags:       []string{"BlueSend"},
+		Source:     "BluTexts iMessage",
+		Tags:       []string{"BluTexts", "iMessage"},
 	}
 
 	// Determine if address is phone or email
@@ -172,17 +208,28 @@ func (s *Syncer) SyncContactToGHL(ctx context.Context, contactID, accountID uuid
 		req.Email = addr
 	}
 
-	if contact.Name != nil {
+	if contact.Name != nil && *contact.Name != "" {
 		req.FirstName = *contact.Name
 	}
 
 	ghlContact, err := s.client.CreateContact(ctx, conn.AccessToken, req)
 	if err != nil {
-		// Handle duplicate contact — extract existing ID from error
+		// Handle duplicate contact — GHL returns the existing contact ID in the error
 		errStr := err.Error()
 		if strings.Contains(errStr, "duplicated contacts") || strings.Contains(errStr, "contactId") {
 			existingID := extractContactIDFromError(errStr)
 			if existingID != "" {
+				// Fetch the existing contact to pull its name back into BluTexts
+				existing, fetchErr := s.client.GetContact(ctx, conn.AccessToken, existingID)
+				if fetchErr == nil && existing != nil {
+					name := strings.TrimSpace(existing.FirstName + " " + existing.LastName)
+					if name != "" {
+						_, _ = s.db.Exec(ctx, `
+							UPDATE contacts SET ghl_contact_id = $1, name = $2 WHERE id = $3
+						`, existingID, name, contact.ID)
+						return nil
+					}
+				}
 				_, _ = s.db.Exec(ctx, `UPDATE contacts SET ghl_contact_id = $1 WHERE id = $2`, existingID, contact.ID)
 				return nil
 			}
@@ -190,9 +237,17 @@ func (s *Syncer) SyncContactToGHL(ctx context.Context, contactID, accountID uuid
 		return fmt.Errorf("create GHL contact: %w", err)
 	}
 
-	_, _ = s.db.Exec(ctx, `
-		UPDATE contacts SET ghl_contact_id = $1 WHERE id = $2
-	`, ghlContact.ID, contact.ID)
+	// Save the GHL contact ID and name (if GHL generated one)
+	name := strings.TrimSpace(ghlContact.FirstName + " " + ghlContact.LastName)
+	if name != "" {
+		_, _ = s.db.Exec(ctx, `
+			UPDATE contacts SET ghl_contact_id = $1, name = $2 WHERE id = $3
+		`, ghlContact.ID, name, contact.ID)
+	} else {
+		_, _ = s.db.Exec(ctx, `
+			UPDATE contacts SET ghl_contact_id = $1 WHERE id = $2
+		`, ghlContact.ID, contact.ID)
+	}
 
 	return nil
 }
@@ -213,36 +268,3 @@ func extractContactIDFromError(errStr string) string {
 	return errStr[start : start+end]
 }
 
-// HandleInboundGHLMessage processes a message sent from GHL to be delivered via iMessage.
-// This is called when GHL's webhook fires for an outbound message on the custom channel.
-func (s *Syncer) HandleInboundGHLMessage(ctx context.Context, locationID, conversationID, message string) error {
-	// Find account from location
-	var accountID uuid.UUID
-	err := s.db.QueryRow(ctx, `
-		SELECT account_id FROM ghl_connections WHERE location_id = $1
-	`, locationID).Scan(&accountID)
-	if err != nil {
-		return fmt.Errorf("account not found for location %s: %w", locationID, err)
-	}
-
-	// Find conversation and contact to route back
-	var conv models.Conversation
-	var contact models.Contact
-	err = s.db.QueryRow(ctx, `
-		SELECT c.id, c.phone_number_id, c.contact_id, ct.imessage_address
-		FROM conversations c
-		JOIN contacts ct ON ct.id = c.contact_id
-		WHERE c.ghl_conversation_id = $1 AND c.account_id = $2
-	`, conversationID, accountID).Scan(
-		&conv.ID, &conv.PhoneNumberID, &conv.ContactID, &contact.IMessageAddress,
-	)
-	if err != nil {
-		return fmt.Errorf("conversation not found: %w", err)
-	}
-
-	// This will be routed through the normal messaging router
-	// The API handler calls router.Send() with this info
-	_ = contact.IMessageAddress
-	_ = conv.PhoneNumberID
-	return nil
-}

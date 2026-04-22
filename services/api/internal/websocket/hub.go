@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,12 +14,43 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// allowedOrigins is the set of Origins permitted on WebSocket upgrades.
+// Populated from the APP_URL + DEVICE_WS_URL env vars at startup; populated
+// to nil means "allow all" (only used in dev when ALLOW_ANY_WS_ORIGIN=1).
+var allowedOrigins map[string]bool
+
+// SetAllowedOrigins is called from main on boot to seed the allowlist.
+// Keys are normalized to lowercase scheme://host[:port].
+func SetAllowedOrigins(origins []string) {
+	if len(origins) == 0 {
+		allowedOrigins = nil
+		return
+	}
+	allowedOrigins = make(map[string]bool, len(origins))
+	for _, o := range origins {
+		allowedOrigins[strings.ToLower(o)] = true
+	}
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		// In production, validate origin against allowed domains
-		return true
+		// Allow same-origin (no Origin header — typical for native clients
+		// like the Go device agent which doesn't set Origin) AND the
+		// configured allowlist of browser-side origins.
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			// Non-browser client (device agent, curl, websocat). The agent
+			// authenticates separately via Bearer token, so no-origin is
+			// safe here.
+			return true
+		}
+		if allowedOrigins == nil {
+			// Boot didn't populate the allowlist — fail closed.
+			return false
+		}
+		return allowedOrigins[strings.ToLower(origin)]
 	},
 }
 
@@ -28,10 +60,12 @@ var upgrader = websocket.Upgrader{
 
 // DeviceHub manages connected device agents and routes messages to them.
 type DeviceHub struct {
-	mu          sync.RWMutex
-	devices     map[uuid.UUID]*DeviceConn  // deviceID → connection
-	inbound     chan InboundEvent
-	db          interface{ HandleInbound(models.DeviceInboundPayload) error } // injected
+	mu      sync.RWMutex
+	devices map[uuid.UUID]*DeviceConn // deviceID → connection
+	inbound chan InboundEvent
+	db      interface {
+		HandleInbound(models.DeviceInboundPayload) error
+	} // injected
 }
 
 type DeviceConn struct {
@@ -69,7 +103,16 @@ func (h *DeviceHub) ServeDevice(w http.ResponseWriter, r *http.Request, deviceID
 		hub:      h,
 	}
 
+	// If this device is already registered (reconnect or duplicate), forcibly
+	// close the old connection before swapping in the new one. Without this,
+	// the stale readPump eventually errors out and its disconnect() call
+	// removes the NEW connection from the map, leaving a zombie where the
+	// device thinks it's connected but the server has no route to it.
 	h.mu.Lock()
+	if old, ok := h.devices[deviceID]; ok {
+		log.Printf("Device %s reconnecting — closing stale connection", deviceID)
+		_ = old.conn.Close()
+	}
 	h.devices[deviceID] = dc
 	h.mu.Unlock()
 
@@ -113,23 +156,30 @@ func (h *DeviceHub) GetConnectedDevices() []uuid.UUID {
 	return ids
 }
 
-func (h *DeviceHub) disconnect(deviceID uuid.UUID) {
+// disconnect removes a device from the hub, but only if the map entry still
+// points at the same DeviceConn. This prevents a stale readPump (from a prior
+// session) from evicting a newer live connection after the client reconnected.
+func (h *DeviceHub) disconnect(dc *DeviceConn) {
 	h.mu.Lock()
-	delete(h.devices, deviceID)
+	if current, ok := h.devices[dc.DeviceID]; ok && current == dc {
+		delete(h.devices, dc.DeviceID)
+		log.Printf("Device disconnected: %s", dc.DeviceID)
+	} else {
+		log.Printf("Stale readPump finished for %s — ignoring (newer session is live)", dc.DeviceID)
+	}
 	h.mu.Unlock()
-	log.Printf("Device disconnected: %s", deviceID)
 }
 
 func (dc *DeviceConn) readPump() {
 	defer func() {
-		dc.hub.disconnect(dc.DeviceID)
+		dc.hub.disconnect(dc)
 		dc.conn.Close()
 	}()
 
 	dc.conn.SetReadLimit(512 * 1024)
-	dc.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	dc.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	dc.conn.SetPongHandler(func(string) error {
-		dc.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		dc.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
 
@@ -153,7 +203,8 @@ func (dc *DeviceConn) readPump() {
 }
 
 func (dc *DeviceConn) writePump() {
-	ticker := time.NewTicker(30 * time.Second)
+	// Ping every 10 seconds to keep the connection alive through edge proxies.
+	ticker := time.NewTicker(10 * time.Second)
 	defer func() {
 		ticker.Stop()
 		dc.conn.Close()
@@ -268,9 +319,9 @@ func (cc *ClientConn) readPump() {
 		cc.conn.Close()
 	}()
 	cc.conn.SetReadLimit(1024)
-	cc.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	cc.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	cc.conn.SetPongHandler(func(string) error {
-		cc.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		cc.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
 	for {
@@ -281,7 +332,7 @@ func (cc *ClientConn) readPump() {
 }
 
 func (cc *ClientConn) writePump() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer func() {
 		ticker.Stop()
 		cc.conn.Close()

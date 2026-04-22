@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,8 +38,25 @@ type Account struct {
 	SetupComplete        bool          `json:"setup_complete" db:"setup_complete"`
 	SetupFeePaid         bool          `json:"setup_fee_paid" db:"setup_fee_paid"`
 	Timezone             string        `json:"timezone" db:"timezone"`
-	CreatedAt            time.Time     `json:"created_at" db:"created_at"`
-	UpdatedAt            time.Time     `json:"updated_at" db:"updated_at"`
+	CallingEnabled       bool          `json:"calling_enabled" db:"calling_enabled"`
+	// Cancellation lifecycle
+	CancelledAt        *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
+	GracePeriodEndsAt  *time.Time `json:"grace_period_ends_at,omitempty" db:"grace_period_ends_at"`
+	AutoReplyStartsAt  *time.Time `json:"auto_reply_starts_at,omitempty" db:"auto_reply_starts_at"`
+	AutoReplyEnabled   bool       `json:"auto_reply_enabled" db:"auto_reply_enabled"`
+	AutoReplyMessage   string          `json:"auto_reply_message" db:"auto_reply_message"`
+	CustomFieldSchema  json.RawMessage `json:"custom_field_schema" db:"custom_field_schema"`
+	CreatedAt          time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at" db:"updated_at"`
+}
+
+// CustomFieldDefinition describes a single custom field in the account schema.
+type CustomFieldDefinition struct {
+	Key      string   `json:"key"`
+	Label    string   `json:"label"`
+	Type     string   `json:"type"`     // text, number, select, date, url
+	Required bool     `json:"required"`
+	Options  []string `json:"options,omitempty"` // for select type
 }
 
 // ============================================================
@@ -123,6 +141,7 @@ type PhoneNumber struct {
 	IMessageAddress      *string           `json:"imessage_address,omitempty" db:"imessage_address"`
 	Status               PhoneNumberStatus `json:"status" db:"status"`
 	DailyNewContactLimit int               `json:"daily_new_contact_limit" db:"daily_new_contact_limit"`
+	VoiceEnabled         bool              `json:"voice_enabled" db:"voice_enabled"`
 	CreatedAt            time.Time         `json:"created_at" db:"created_at"`
 	UpdatedAt            time.Time         `json:"updated_at" db:"updated_at"`
 }
@@ -132,17 +151,24 @@ type PhoneNumber struct {
 // ============================================================
 
 type Contact struct {
-	ID               uuid.UUID  `json:"id" db:"id"`
-	AccountID        uuid.UUID  `json:"account_id" db:"account_id"`
-	PhoneNumberID    *uuid.UUID `json:"phone_number_id,omitempty" db:"phone_number_id"`
-	IMessageAddress  string     `json:"imessage_address" db:"imessage_address"`
-	Name             *string    `json:"name,omitempty" db:"name"`
-	GHLContactID     *string    `json:"ghl_contact_id,omitempty" db:"ghl_contact_id"`
-	FirstMessageAt   *time.Time `json:"first_message_at,omitempty" db:"first_message_at"`
-	LastMessageAt    *time.Time `json:"last_message_at,omitempty" db:"last_message_at"`
-	MessageCount     int        `json:"message_count" db:"message_count"`
-	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+	ID               uuid.UUID              `json:"id" db:"id"`
+	AccountID        uuid.UUID              `json:"account_id" db:"account_id"`
+	PhoneNumberID    *uuid.UUID             `json:"phone_number_id,omitempty" db:"phone_number_id"`
+	IMessageAddress  string                 `json:"imessage_address" db:"imessage_address"`
+	Name             *string                `json:"name,omitempty" db:"name"`
+	Email            *string                `json:"email,omitempty" db:"email"`
+	Company          *string                `json:"company,omitempty" db:"company"`
+	Notes            string                 `json:"notes" db:"notes"`
+	Tags             []string               `json:"tags" db:"tags"`
+	CustomFields     map[string]interface{} `json:"custom_fields" db:"custom_fields"`
+	GHLContactID     *string                `json:"ghl_contact_id,omitempty" db:"ghl_contact_id"`
+	IMessageCapable    *bool      `json:"imessage_capable" db:"imessage_capable"`
+	IMessageCheckedAt  *time.Time `json:"imessage_checked_at,omitempty" db:"imessage_checked_at"`
+	FirstMessageAt   *time.Time             `json:"first_message_at,omitempty" db:"first_message_at"`
+	LastMessageAt    *time.Time             `json:"last_message_at,omitempty" db:"last_message_at"`
+	MessageCount     int                    `json:"message_count" db:"message_count"`
+	CreatedAt        time.Time              `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at" db:"updated_at"`
 }
 
 // ============================================================
@@ -201,6 +227,7 @@ type Message struct {
 	ContactID       uuid.UUID        `json:"contact_id" db:"contact_id"`
 	Direction       MessageDirection `json:"direction" db:"direction"`
 	Content         string           `json:"content" db:"content"`
+	Attachments     []Attachment     `json:"attachments,omitempty" db:"attachments"`
 	IMessageGUID    *string          `json:"imessage_guid,omitempty" db:"imessage_guid"`
 	Status          MessageStatus    `json:"status" db:"status"`
 	SentAt          *time.Time       `json:"sent_at,omitempty" db:"sent_at"`
@@ -210,6 +237,7 @@ type Message struct {
 	ErrorMessage    *string          `json:"error_message,omitempty" db:"error_message"`
 	GHLMessageID    *string          `json:"ghl_message_id,omitempty" db:"ghl_message_id"`
 	GHLSyncedAt     *time.Time       `json:"ghl_synced_at,omitempty" db:"ghl_synced_at"`
+	Service         string           `json:"service" db:"service"` // "imessage" or "sms"
 	CreatedAt       time.Time        `json:"created_at" db:"created_at"`
 }
 
@@ -238,11 +266,12 @@ type GHLConnection struct {
 // ============================================================
 
 type SignupRequest struct {
-	Email     string `json:"email" validate:"required,email"`
-	Password  string `json:"password" validate:"required,min=8"`
-	FirstName string `json:"first_name" validate:"required"`
-	LastName  string `json:"last_name" validate:"required"`
-	Company   string `json:"company" validate:"required"`
+	Email             string `json:"email" validate:"required,email"`
+	Password          string `json:"password" validate:"required,min=8"`
+	FirstName         string `json:"first_name" validate:"required"`
+	LastName          string `json:"last_name" validate:"required"`
+	Company           string `json:"company" validate:"required"`
+	PreferredAreaCode string `json:"preferred_area_code"`
 }
 
 type LoginRequest struct {
@@ -258,9 +287,25 @@ type AuthResponse struct {
 }
 
 type SendMessageRequest struct {
-	PhoneNumberID string `json:"phone_number_id" validate:"required,uuid"`
-	ToAddress     string `json:"to_address" validate:"required"`
-	Content       string `json:"content" validate:"required,max=5000"`
+	PhoneNumberID string       `json:"phone_number_id" validate:"required,uuid"`
+	ToAddress     string       `json:"to_address" validate:"required"`
+	Content       string       `json:"content" validate:"max=5000"`
+	Attachments   []Attachment `json:"attachments,omitempty"`
+	Effect        string       `json:"effect,omitempty"` // iMessage effect ID (e.g. "slam", "confetti")
+
+	// GHLMessageID is set internally when this send was initiated by a GHL
+	// delivery webhook. The router stores it on the message so the GHL syncer
+	// skips re-pushing it (which would cause double logging in GHL).
+	GHLMessageID string `json:"-"`
+}
+
+// Attachment represents a media file attached to a message.
+type Attachment struct {
+	URL      string `json:"url"`
+	Type     string `json:"type"`     // image/jpeg, video/mp4, audio/m4a, etc.
+	Filename string `json:"filename"`
+	Size     int64  `json:"size"`
+	WebURL   string `json:"web_url,omitempty"` // Browser-playable version (e.g., webm for audio)
 }
 
 type SendMessageResponse struct {
@@ -295,9 +340,10 @@ type CreateCheckoutRequest struct {
 }
 
 type CreateCheckoutResponse struct {
-	ClientSecret string `json:"client_secret"`
-	CustomerID   string `json:"customer_id"`
+	URL          string `json:"url"`
 	SessionID    string `json:"session_id"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	CustomerID   string `json:"customer_id"`
 }
 
 // WebSocket event types sent to frontend
@@ -328,26 +374,159 @@ const (
 	DeviceEventOutboundMessage = "outbound_message"
 	DeviceEventHeartbeat       = "heartbeat"
 	DeviceEventRegister        = "register"
+	DeviceEventInitiateCall    = "initiate_call"
+	DeviceEventCallControl     = "call_control"
+	DeviceEventCallStatus      = "call_status"
 )
 
+// DeviceCallPayload instructs the device agent to join an Agora channel
+// and place a FaceTime Audio call to the contact. Audio is bridged through
+// BlackHole on the hosted Mac.
+type DeviceCallPayload struct {
+	CallID       string `json:"call_id"`
+	To           string `json:"to"`       // contact phone number (E.164) or email (for FaceTime Audio)
+	FromNumber   string `json:"from_number"`
+	AgoraChannel string `json:"agora_channel"`
+	AgoraToken   string `json:"agora_token"`
+	AgoraUID     uint32 `json:"agora_uid"`
+	AgoraAppID   string `json:"agora_app_id"`
+}
+
+// DeviceCallControl tells the device agent to end/cancel an in-progress call.
+type DeviceCallControl struct {
+	CallID string `json:"call_id"`
+	Action string `json:"action"` // "end", "cancel"
+}
+
+// DeviceCallStatusPayload is reported from the device agent back to the server
+// as the call progresses (ringing, connected, ended with duration, failed).
+type DeviceCallStatusPayload struct {
+	CallID   string `json:"call_id"`
+	Status   string `json:"status"`   // "ringing", "connected", "ended", "failed"
+	Duration int    `json:"duration"` // seconds, set on ended
+	Error    string `json:"error,omitempty"`
+}
+
+// CallDirection and CallStatus mirror the call_logs check constraints.
+type CallDirection string
+type CallStatus string
+
+const (
+	CallDirectionInbound  CallDirection = "inbound"
+	CallDirectionOutbound CallDirection = "outbound"
+
+	CallStatusInitiated CallStatus = "initiated"
+	CallStatusRinging   CallStatus = "ringing"
+	CallStatusConnected CallStatus = "connected"
+	CallStatusCompleted CallStatus = "completed"
+	CallStatusFailed    CallStatus = "failed"
+	CallStatusMissed    CallStatus = "missed"
+	CallStatusCancelled CallStatus = "cancelled"
+)
+
+type CallLog struct {
+	ID              uuid.UUID     `json:"id" db:"id"`
+	AccountID       uuid.UUID     `json:"account_id" db:"account_id"`
+	PhoneNumberID   *uuid.UUID    `json:"phone_number_id,omitempty" db:"phone_number_id"`
+	DeviceID        *uuid.UUID    `json:"device_id,omitempty" db:"device_id"`
+	Direction       CallDirection `json:"direction" db:"direction"`
+	FromNumber      string        `json:"from_number" db:"from_number"`
+	ToNumber        string        `json:"to_number" db:"to_number"`
+	AgoraChannel    string        `json:"-" db:"agora_channel"`
+	Status          CallStatus    `json:"status" db:"status"`
+	FailureReason   *string       `json:"failure_reason,omitempty" db:"failure_reason"`
+	DurationSeconds *int          `json:"duration_seconds,omitempty" db:"duration_seconds"`
+	StartedAt       *time.Time    `json:"started_at,omitempty" db:"started_at"`
+	ConnectedAt     *time.Time    `json:"connected_at,omitempty" db:"connected_at"`
+	EndedAt         *time.Time    `json:"ended_at,omitempty" db:"ended_at"`
+	CreatedAt       time.Time     `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at" db:"updated_at"`
+}
+
 type DeviceSendPayload struct {
-	MessageID      string `json:"message_id"`
-	PhoneNumber    string `json:"phone_number"`    // sending from
-	ToAddress      string `json:"to_address"`      // sending to
-	Content        string `json:"content"`
-	IMessageAddress string `json:"imessage_address"` // iMessage handle to send from
+	MessageID       string       `json:"message_id"`
+	PhoneNumber     string       `json:"phone_number"`     // sending from
+	ToAddress       string       `json:"to_address"`       // sending to
+	Content         string       `json:"content"`
+	IMessageAddress string       `json:"imessage_address"` // iMessage handle to send from
+	Attachments     []Attachment `json:"attachments,omitempty"`
+	Effect          string       `json:"effect,omitempty"` // iMessage effect ID
+	// IMessageCapable: nil = unknown (device must check), true = use iMessage,
+	// false = use SMS via Continuity. Cached on the contact server-side.
+	IMessageCapable *bool `json:"imessage_capable,omitempty"`
 }
 
 type DeviceInboundPayload struct {
-	IMessageGUID string    `json:"imessage_guid"`
-	FromAddress  string    `json:"from_address"`
-	ToAddress    string    `json:"to_address"` // which number/address on device received it
-	Content      string    `json:"content"`
-	ReceivedAt   time.Time `json:"received_at"`
+	IMessageGUID string       `json:"imessage_guid"`
+	FromAddress  string       `json:"from_address"`
+	ToAddress    string       `json:"to_address"` // which number/address on device received it
+	Content      string       `json:"content"`
+	Attachments  []Attachment `json:"attachments,omitempty"`
+	ReceivedAt   time.Time    `json:"received_at"`
 }
 
 type DeviceStatusPayload struct {
 	DeviceID     string `json:"device_id"`
 	Status       string `json:"status"`
 	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+// ============================================================
+// ScheduledMessage
+// ============================================================
+
+type ScheduledMessageStatus string
+
+const (
+	ScheduledStatusPending   ScheduledMessageStatus = "pending"
+	ScheduledStatusSent      ScheduledMessageStatus = "sent"
+	ScheduledStatusFailed    ScheduledMessageStatus = "failed"
+	ScheduledStatusCancelled ScheduledMessageStatus = "cancelled"
+)
+
+type ScheduledMessage struct {
+	ID            uuid.UUID              `json:"id" db:"id"`
+	AccountID     uuid.UUID              `json:"account_id" db:"account_id"`
+	PhoneNumberID uuid.UUID              `json:"phone_number_id" db:"phone_number_id"`
+	ToAddress     string                 `json:"to_address" db:"to_address"`
+	Content       string                 `json:"content" db:"content"`
+	Attachments   []Attachment           `json:"attachments" db:"attachments"`
+	Effect        *string                `json:"effect,omitempty" db:"effect"`
+	ScheduledAt   time.Time              `json:"scheduled_at" db:"scheduled_at"`
+	Status        ScheduledMessageStatus `json:"status" db:"status"`
+	SentAt        *time.Time             `json:"sent_at,omitempty" db:"sent_at"`
+	ErrorMessage  *string                `json:"error_message,omitempty" db:"error_message"`
+	CreatedBy     uuid.UUID              `json:"created_by" db:"created_by"`
+	CreatedAt     time.Time              `json:"created_at" db:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at" db:"updated_at"`
+}
+
+type CreateScheduledMessageRequest struct {
+	PhoneNumberID string       `json:"phone_number_id" validate:"required,uuid"`
+	ToAddress     string       `json:"to_address" validate:"required"`
+	Content       string       `json:"content"`
+	Attachments   []Attachment `json:"attachments,omitempty"`
+	Effect        string       `json:"effect,omitempty"`
+	ScheduledAt   string       `json:"scheduled_at" validate:"required"` // RFC3339
+}
+
+// ============================================================
+// Invitation (team members)
+// ============================================================
+
+type Invitation struct {
+	ID         uuid.UUID  `json:"id" db:"id"`
+	AccountID  uuid.UUID  `json:"account_id" db:"account_id"`
+	Email      string     `json:"email" db:"email"`
+	Role       UserRole   `json:"role" db:"role"`
+	Token      string     `json:"-" db:"token"`
+	InvitedBy  uuid.UUID  `json:"invited_by" db:"invited_by"`
+	ExpiresAt  time.Time  `json:"expires_at" db:"expires_at"`
+	AcceptedAt *time.Time `json:"accepted_at,omitempty" db:"accepted_at"`
+	CreatedAt  time.Time  `json:"created_at" db:"created_at"`
+}
+
+type InviteRequest struct {
+	Email string `json:"email" validate:"required,email"`
+	Role  string `json:"role" validate:"required,oneof=member admin"`
 }
