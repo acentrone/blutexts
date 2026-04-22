@@ -1,332 +1,691 @@
 "use client";
 
-import Link from "next/link";
-import { motion } from "framer-motion";
-import { CheckIcon, ArrowRightIcon, MessageCircleIcon, ZapIcon, ShieldCheckIcon, BarChart3Icon } from "lucide-react";
+import { useEffect } from "react";
+import "./marketing.css";
+import MarketingNav from "./_components/MarketingNav";
+import MarketingFooter from "./_components/MarketingFooter";
 
-const plans = [
-  {
-    name: "Monthly",
-    setupFee: "$399",
-    price: "$199",
-    period: "/month",
-    description: "One dedicated number. Unlimited existing conversations.",
-    features: [
-      "1 dedicated phone number",
-      "50 new contacts/day",
-      "Unlimited existing conversations",
-      "Go High Level integration",
-      "Real-time message sync",
-      "Full message history",
-      "CSV export",
-      "Email support",
-    ],
-    cta: "Get Started",
-    href: "/signup?plan=monthly",
-    highlight: false,
-  },
-  {
-    name: "Annual",
-    setupFee: "$399",
-    price: "$2,600",
-    period: "/year",
-    savings: "Save $788/yr",
-    description: "Everything in Monthly, billed once a year.",
-    features: [
-      "1 dedicated phone number",
-      "50 new contacts/day",
-      "Unlimited existing conversations",
-      "Go High Level integration",
-      "Real-time message sync",
-      "Full message history",
-      "CSV export",
-      "Priority support",
-    ],
-    cta: "Get Best Value",
-    href: "/signup?plan=annual",
-    highlight: true,
-  },
-];
+/**
+ * BluTexts marketing homepage.
+ *
+ * 1:1 implementation of homepage/direction-a.html from the Claude Design
+ * handoff. The visual structure, copy, and animations are kept identical
+ * to the design — see apps/web/app/(marketing)/marketing.css for the full
+ * stylesheet. Only the routing/hrefs are wired into the real product
+ * (login → /login, signup CTAs → /signup).
+ *
+ * Reveal-on-scroll uses an IntersectionObserver mirroring the design's
+ * inline script. The "tweaks panel" from the design source (an editor-
+ * preview tool) is intentionally omitted — not production behavior.
+ */
+export default function MarketingHomePage() {
+  useEffect(() => {
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            e.target.classList.add("in");
+            io.unobserve(e.target);
+          }
+        });
+      },
+      { threshold: 0.1, rootMargin: "0px 0px -60px 0px" }
+    );
+    document
+      .querySelectorAll(".marketing-page .rise, .marketing-page .rise-group")
+      .forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
 
-const stats = [
-  { value: "4–8×", label: "Higher open rates vs email" },
-  { value: "45%", label: "Average reply rate" },
-  { value: "<2min", label: "Typical response time" },
-  { value: "100%", label: "Native iMessage delivery" },
-];
-
-const features = [
-  {
-    icon: MessageCircleIcon,
-    title: "Real iMessages, not SMS",
-    description:
-      "Blue bubbles build trust. Recipients see your message in their native Messages app — indistinguishable from a personal text.",
-  },
-  {
-    icon: ZapIcon,
-    title: "Go High Level, fully automated",
-    description:
-      "Every message, contact, and conversation syncs bidirectionally with your GHL sub-account. No manual work after onboarding.",
-  },
-  {
-    icon: ShieldCheckIcon,
-    title: "Dedicated numbers, never shared",
-    description:
-      "Your number is yours. No shared infrastructure, no diluted deliverability, no cross-contamination with other senders.",
-  },
-  {
-    icon: BarChart3Icon,
-    title: "Built-in guardrails",
-    description:
-      "50 new contacts/day per number keeps your account in Apple's good graces. Existing conversations are unrestricted.",
-  },
-];
-
-export default function LandingPage() {
   return (
-    <div className="flex flex-col min-h-screen bg-white">
-      {/* Nav */}
-      <header className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-xl border-b border-gray-100">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-[#007AFF] flex items-center justify-center">
-              <MessageCircleIcon className="w-5 h-5 text-white" />
-            </div>
-            <span className="font-semibold text-gray-900 text-lg tracking-tight">BlueSend</span>
-          </div>
-          <nav className="hidden md:flex items-center gap-8 text-sm text-gray-600">
-            <a href="#features" className="hover:text-gray-900 transition-colors">Features</a>
-            <a href="#pricing" className="hover:text-gray-900 transition-colors">Pricing</a>
-            <Link href="/login" className="hover:text-gray-900 transition-colors">Sign in</Link>
-          </nav>
-          <Link
-            href="/signup"
-            className="bg-[#007AFF] text-white text-sm font-medium px-5 py-2.5 rounded-full hover:bg-blue-600 transition-colors"
-          >
-            Get Started
-          </Link>
-        </div>
-      </header>
+    <div className="marketing-page">
+      <MarketingNav />
 
-      <main className="flex-1">
-        {/* Hero */}
-        <section className="pt-32 pb-24 px-6">
-          <div className="max-w-4xl mx-auto text-center">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <div className="inline-flex items-center gap-2 bg-blue-50 text-[#007AFF] text-sm font-medium px-4 py-1.5 rounded-full mb-6">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#007AFF] animate-pulse" />
-                iMessage-native CRM infrastructure
-              </div>
-
-              <h1 className="text-5xl md:text-7xl font-bold text-gray-900 tracking-tight leading-none mb-6">
-                iMessage
-                <br />
-                <span className="text-[#007AFF]">for business.</span>
-                <br />
-                Finally.
-              </h1>
-
-              <p className="text-xl text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed">
-                Send and receive iMessages through Go High Level. Blue bubbles that feel personal,
-                backed by CRM infrastructure that scales. Dedicated numbers, real-time sync,
-                zero bulk-messaging risk.
-              </p>
-
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <Link
-                  href="/signup"
-                  className="w-full sm:w-auto bg-[#007AFF] text-white font-semibold px-8 py-4 rounded-full text-lg hover:bg-blue-600 transition-all hover:shadow-lg hover:shadow-blue-500/25 flex items-center justify-center gap-2"
-                >
-                  Start sending today
-                  <ArrowRightIcon className="w-5 h-5" />
-                </Link>
-                <a
-                  href="#pricing"
-                  className="w-full sm:w-auto border border-gray-200 text-gray-700 font-medium px-8 py-4 rounded-full text-lg hover:border-gray-300 hover:bg-gray-50 transition-colors text-center"
-                >
-                  See pricing
-                </a>
-              </div>
-            </motion.div>
-
-            {/* Message bubble mockup */}
-            <motion.div
-              initial={{ opacity: 0, y: 40 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.8, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
-              className="mt-16 max-w-sm mx-auto"
-            >
-              <div className="bg-gray-100 rounded-3xl p-6 space-y-3 shadow-xl shadow-gray-200/50">
-                <div className="flex justify-end">
-                  <div className="bubble-outbound px-4 py-2.5 text-sm max-w-[75%]">
-                    Hey Sarah! Quick follow-up on our proposal — any questions?
-                  </div>
-                </div>
-                <div className="flex justify-start">
-                  <div className="bubble-inbound px-4 py-2.5 text-sm max-w-[75%]">
-                    Hey! Yes actually — can we schedule a 15-min call?
-                  </div>
-                </div>
-                <div className="flex justify-end">
-                  <div className="bubble-outbound px-4 py-2.5 text-sm max-w-[75%]">
-                    Absolutely. How does Thursday at 2pm work?
-                  </div>
-                </div>
-                <div className="text-center text-xs text-gray-400 pt-2">
-                  Delivered • Read 2m ago
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        </section>
-
-        {/* Stats */}
-        <section className="py-16 px-6 bg-gray-50">
-          <div className="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8">
-            {stats.map((stat) => (
-              <div key={stat.value} className="text-center">
-                <div className="text-4xl font-bold text-[#007AFF] mb-1">{stat.value}</div>
-                <div className="text-sm text-gray-500">{stat.label}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Features */}
-        <section id="features" className="py-24 px-6">
-          <div className="max-w-6xl mx-auto">
-            <div className="text-center mb-16">
-              <h2 className="text-4xl font-bold text-gray-900 tracking-tight mb-4">
-                Built for serious outreach
-              </h2>
-              <p className="text-lg text-gray-500 max-w-2xl mx-auto">
-                Not a blast tool. A precision instrument for teams that care about reply rates.
-              </p>
-            </div>
-            <div className="grid md:grid-cols-2 gap-8">
-              {features.map((feature) => (
-                <div
-                  key={feature.title}
-                  className="bg-white border border-gray-100 rounded-2xl p-8 hover:border-blue-100 hover:shadow-lg hover:shadow-blue-50 transition-all"
-                >
-                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-5">
-                    <feature.icon className="w-6 h-6 text-[#007AFF]" />
-                  </div>
-                  <h3 className="text-xl font-semibold text-gray-900 mb-3">{feature.title}</h3>
-                  <p className="text-gray-500 leading-relaxed">{feature.description}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Pricing */}
-        <section id="pricing" className="py-24 px-6 bg-gray-50">
-          <div className="max-w-5xl mx-auto">
-            <div className="text-center mb-16">
-              <h2 className="text-4xl font-bold text-gray-900 tracking-tight mb-4">
-                Simple, transparent pricing
-              </h2>
-              <p className="text-lg text-gray-500">
-                One-time $399 setup fee covers your dedicated number provisioning.
-              </p>
-            </div>
-            <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-              {plans.map((plan) => (
-                <div
-                  key={plan.name}
-                  className={`rounded-3xl p-8 ${
-                    plan.highlight
-                      ? "bg-[#007AFF] text-white shadow-2xl shadow-blue-500/30 ring-1 ring-blue-400"
-                      : "bg-white border border-gray-200"
-                  }`}
-                >
-                  {plan.savings && (
-                    <div className="inline-block bg-white/20 text-white text-xs font-semibold px-3 py-1 rounded-full mb-4">
-                      {plan.savings}
-                    </div>
-                  )}
-                  <div className="mb-6">
-                    <div className={`text-sm font-medium mb-1 ${plan.highlight ? "text-blue-100" : "text-gray-500"}`}>
-                      {plan.name}
-                    </div>
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-5xl font-bold tracking-tight">{plan.price}</span>
-                      <span className={`text-lg ${plan.highlight ? "text-blue-200" : "text-gray-400"}`}>
-                        {plan.period}
-                      </span>
-                    </div>
-                    <div className={`text-sm mt-1 ${plan.highlight ? "text-blue-200" : "text-gray-400"}`}>
-                      + {plan.setupFee} one-time setup
-                    </div>
-                  </div>
-                  <p className={`text-sm mb-6 ${plan.highlight ? "text-blue-100" : "text-gray-500"}`}>
-                    {plan.description}
-                  </p>
-                  <ul className="space-y-3 mb-8">
-                    {plan.features.map((f) => (
-                      <li key={f} className="flex items-center gap-3 text-sm">
-                        <CheckIcon className={`w-4 h-4 flex-shrink-0 ${plan.highlight ? "text-white" : "text-[#007AFF]"}`} />
-                        <span className={plan.highlight ? "text-blue-50" : "text-gray-600"}>{f}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <Link
-                    href={plan.href}
-                    className={`block text-center font-semibold py-3.5 rounded-2xl transition-all ${
-                      plan.highlight
-                        ? "bg-white text-[#007AFF] hover:bg-blue-50"
-                        : "bg-[#007AFF] text-white hover:bg-blue-600"
-                    }`}
-                  >
-                    {plan.cta}
-                  </Link>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* CTA */}
-        <section className="py-24 px-6">
-          <div className="max-w-3xl mx-auto text-center">
-            <h2 className="text-4xl font-bold text-gray-900 tracking-tight mb-6">
-              Ready to go blue?
-            </h2>
-            <p className="text-lg text-gray-500 mb-10">
-              Setup takes minutes. You'll be sending iMessages through GHL the same day.
+      {/* ═══ HERO ═══ */}
+      <section className="hero">
+        <div className="container">
+          <div className="rise">
+            <span className="eyebrow">Human conversation · not another blast</span>
+            <h1 className="display">
+              Sell where your customers <em>actually text</em>.
+            </h1>
+            <p className="lead">
+              Sales stopped feeling like a conversation. Blu brings it back —
+              real iMessage, real people, real replies. There&apos;s a person
+              on the other end of the phone, and it finally looks like it.
             </p>
-            <Link
-              href="/signup"
-              className="inline-flex items-center gap-2 bg-[#007AFF] text-white font-semibold px-10 py-4 rounded-full text-lg hover:bg-blue-600 transition-all hover:shadow-xl hover:shadow-blue-500/30"
-            >
-              Get started — $399 setup
-              <ArrowRightIcon className="w-5 h-5" />
-            </Link>
-          </div>
-        </section>
-      </main>
-
-      <footer className="border-t border-gray-100 py-8 px-6">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-gray-400">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-[#007AFF] flex items-center justify-center">
-              <MessageCircleIcon className="w-4 h-4 text-white" />
+            <div className="cta-row">
+              <a
+                className="btn primary"
+                href="/demo"
+                data-iclosed-link="https://app.iclosed.io/e/blutext/imessage-demo"
+                data-embed-type="popup"
+              >
+                Book a demo <span className="arrow">→</span>
+              </a>
+              <a className="btn ghost" href="#how-it-works">
+                See how it works
+              </a>
             </div>
-            <span className="font-medium text-gray-600">BlueSend</span>
+            <div className="meta-row">
+              <span className="check">Dedicated numbers</span>
+              <span className="check">No A2P roadblocks</span>
+              <span className="check">SMS fallback built-in</span>
+            </div>
           </div>
-          <div className="flex items-center gap-6">
-            <a href="/privacy" className="hover:text-gray-600 transition-colors">Privacy</a>
-            <a href="/terms" className="hover:text-gray-600 transition-colors">Terms</a>
-            <a href="mailto:support@blutexts.com" className="hover:text-gray-600 transition-colors">Support</a>
+
+          <div className="device-wrap rise">
+            <div className="device-glow" />
+            <div className="iphone">
+              <div className="iphone-screen">
+                <div className="iphone-notch" />
+                <div className="iphone-statusbar">
+                  <span>9:41</span>
+                  <span className="icons">
+                    <span className="signal">
+                      <i /><i /><i /><i />
+                    </span>
+                    <span style={{ fontWeight: 500 }}>5G</span>
+                    <span className="battery">
+                      <i />
+                    </span>
+                  </span>
+                </div>
+                <div className="imessage">
+                  <div className="im-header">
+                    <div className="avatar">A</div>
+                    <div className="meta">
+                      <div className="name">Scott · Truly Foods</div>
+                      <div className="sub">iMessage · Active now</div>
+                    </div>
+                    <div className="icons">
+                      <svg viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm-.5 4a.5.5 0 011 0v4.3l3 2a.5.5 0 01-.6.8l-3.4-2.4V6z" />
+                      </svg>
+                    </div>
+                  </div>
+                  <div className="im-body">
+                    <div className="im-daystamp">
+                      <b>Today</b> 2:14 PM
+                    </div>
+                    <div className="bubble out" style={{ animationDelay: "0.3s" }}>
+                      We saved you the last vanilla protein powder 👀
+                    </div>
+                    <div
+                      className="bubble out"
+                      style={{ animationDelay: "0.7s", borderRadius: "19px" }}
+                    >
+                      Want me to lock it in for you?
+                    </div>
+                    <div className="im-status" style={{ animationDelay: "0.9s" }}>
+                      Delivered · Read 2:14 PM
+                    </div>
+                    <div className="bubble in" style={{ animationDelay: "1.5s" }}>
+                      Yes, absolutely 🙌
+                    </div>
+                    <div
+                      className="bubble in"
+                      style={{ animationDelay: "1.8s", borderRadius: "19px" }}
+                    >
+                      you&apos;re the man
+                    </div>
+                    <div className="voice-msg" style={{ animationDelay: "2.5s" }}>
+                      <div className="play">
+                        <svg viewBox="0 0 10 10">
+                          <path d="M2 1l7 4-7 4z" />
+                        </svg>
+                      </div>
+                      <div className="wave">
+                        {[30, 60, 90, 70, 40, 80, 50, 90, 30, 60, 80, 40, 50, 70, 20, 40].map(
+                          (h, i) => (
+                            <i key={i} style={{ height: `${h}%` }} />
+                          )
+                        )}
+                      </div>
+                      <span className="dur">0:12</span>
+                    </div>
+                    <div className="typing" style={{ animationDelay: "3.2s" }}>
+                      <span /><span /><span />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-          <span>© 2025 BlueSend. Not affiliated with Apple Inc.</span>
         </div>
-      </footer>
+      </section>
+
+      {/* ═══ TRUST ═══ */}
+      <section className="trust rise">
+        <div className="trust-label">Trusted by conversation-driven brands</div>
+        <div className="trust-logos">
+          <span className="brand">Maison Noir</span>
+          <span className="brand sans">Arcwell</span>
+          <span className="brand">Ferment &amp; Co.</span>
+          <span className="brand mono">meridian/</span>
+          <span className="brand sans">HELIX</span>
+          <span className="brand">Pale Harbor</span>
+        </div>
+      </section>
+
+      {/* ═══ PROBLEM ═══ */}
+      <section className="problem">
+        <div className="container">
+          <div className="head rise">
+            <span className="eyebrow">The channel gap</span>
+            <h2 className="display" style={{ marginTop: 18 }}>
+              Sales stopped feeling human. <em>Let&apos;s bring it back.</em>
+            </h2>
+            <p className="lead" style={{ marginTop: 20 }}>
+              Shortcode blasts get filtered, ignored, unsubscribed. iMessage is
+              where your customers actually talk — to friends, to family, to the
+              people they trust. There are real people on both sides of the
+              conversation. It should look like it.
+            </p>
+          </div>
+
+          <div className="compare rise-group">
+            <div className="card bad">
+              <span className="tag">Before · SMS blast</span>
+              <h3>Green bubbles people swipe away.</h3>
+              <p>
+                Shortcodes, unsubscribe links, no reply expected. Reads as an ad
+                — because it is one.
+              </p>
+              <div className="mini-chat">
+                <div className="mini-bubble green">
+                  VANILLA PROTEIN BACK IN STOCK — 20% off today only with code
+                  VAN20. Reply STOP to unsubscribe.{" "}
+                  <a
+                    href="#"
+                    style={{ color: "#fff", textDecoration: "underline" }}
+                  >
+                    bluelink.co/xyz
+                  </a>
+                </div>
+              </div>
+              <div className="stat-row">
+                <div>
+                  <span className="n">2.3%</span>Click-through
+                </div>
+                <div>
+                  <span className="n">8 min</span>Avg. response
+                </div>
+                <div>
+                  <span className="n">18%</span>Unsub rate
+                </div>
+              </div>
+            </div>
+
+            <div className="card good">
+              <span className="tag">With Blu · iMessage</span>
+              <h3>Blue bubbles that read like a friend.</h3>
+              <p>
+                Real numbers, real read receipts, real replies. The message
+                reads human because it is.
+              </p>
+              <div className="mini-chat">
+                <div className="mini-bubble blue">
+                  We saved you the last vanilla protein powder. Did you want to
+                  get that order in?
+                </div>
+                <div className="mini-bubble gray">
+                  Yes, absolutely — you&apos;re the man 🙌
+                </div>
+              </div>
+              <div className="stat-row">
+                <div>
+                  <span className="n">38%</span>Reply rate
+                </div>
+                <div>
+                  <span className="n">48 sec</span>Avg. response
+                </div>
+                <div>
+                  <span className="n">9×</span>Revenue per send
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ HOW IT WORKS ═══ */}
+      <section className="how" id="how-it-works">
+        <div className="container">
+          <div className="head rise">
+            <span className="eyebrow">How it works</span>
+            <h2 className="display" style={{ marginTop: 18 }}>
+              A real number. Real people. <em>Real conversation.</em>
+            </h2>
+            <p className="lead">
+              Skip the A2P paperwork and the shortcode theater. Blu drops your
+              team into a web inbox — human on both ends.
+            </p>
+          </div>
+          <div className="flow rise-group">
+            <div className="step step1">
+              <div className="vis">
+                <div className="shield">
+                  <svg viewBox="0 0 74 84" fill="none">
+                    <defs>
+                      <linearGradient id="shieldgrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stopColor="#6FA7FF" />
+                        <stop offset="1" stopColor="#2E6FE0" />
+                      </linearGradient>
+                    </defs>
+                    <path
+                      d="M37 2 L69 12 V40 C69 60 55 75 37 82 C19 75 5 60 5 40 V12 Z"
+                      fill="url(#shieldgrad)"
+                      stroke="#1D4ED8"
+                      strokeWidth="1.2"
+                    />
+                    <path
+                      d="M22 42 L33 53 L53 31"
+                      fill="none"
+                      stroke="#fff"
+                      strokeWidth="5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <span className="stamp">Approved</span>
+                </div>
+              </div>
+              <div className="n">01</div>
+              <h4>A dedicated number, ready in minutes.</h4>
+              <p>
+                No A2P applications, no shortcode registration, no carrier
+                gatekeeping. Your team gets a real number and a real inbox.
+              </p>
+            </div>
+            <div className="arrow-sep">
+              <svg
+                width="24"
+                height="16"
+                viewBox="0 0 24 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path d="M0 8h22M16 2l6 6-6 6" />
+              </svg>
+            </div>
+            <div className="step step2">
+              <div className="vis">
+                <div className="cloud-box">B</div>
+              </div>
+              <div className="n">02</div>
+              <h4>Messages flow through Blu.</h4>
+              <p>
+                Send from the web. Automate from your CRM. If a contact
+                can&apos;t receive iMessage, Blu falls back to SMS —
+                automatically.
+              </p>
+            </div>
+            <div className="arrow-sep">
+              <svg
+                width="24"
+                height="16"
+                viewBox="0 0 24 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path d="M0 8h22M16 2l6 6-6 6" />
+              </svg>
+            </div>
+            <div className="step step3">
+              <div className="vis">
+                <div style={{ width: "100%" }}>
+                  {[
+                    { dot: "", name: "Alex M.", preview: "saved for you", time: "2:14" },
+                    { dot: "", name: "Priya S.", preview: "on my way", time: "2:09" },
+                    { dot: "read", name: "Jordan L.", preview: "thanks!", time: "1:58" },
+                    { dot: "read", name: "Marco V.", preview: "ill try it", time: "1:42" },
+                    { dot: "read", name: "Casey N.", preview: "perfect", time: "1:31", last: true },
+                  ].map((row, i) => (
+                    <div
+                      key={i}
+                      className="inbox-row"
+                      style={row.last ? { border: "none" } : undefined}
+                    >
+                      <span className={row.dot ? `dot ${row.dot}` : "dot"} />
+                      <span className="name">{row.name}</span>
+                      <span className="preview">{row.preview}</span>
+                      <span className="time">{row.time}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="n">03</div>
+              <h4>Your team, one thread.</h4>
+              <p>
+                Shared inbox, routing, notes, assignments. Reps work where your
+                customers already are — and finally sound like humans there.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ FEATURES ═══ */}
+      <section className="features" id="features">
+        <div className="container">
+          <div className="head rise">
+            <span className="eyebrow">Built for real conversation</span>
+            <h2 className="display" style={{ marginTop: 18 }}>
+              Everything iMessage does. <em>Natively.</em>
+            </h2>
+          </div>
+
+          <div className="feat-grid rise-group">
+            {/* Wide: Real iMessage */}
+            <div className="feat wide">
+              <div className="copy">
+                <span className="kicker">Real iMessage · not a lookalike</span>
+                <h3>Blue bubbles. Real numbers. Real read receipts.</h3>
+                <p>
+                  Every send lands as a native iMessage — dedicated number,
+                  native read receipts, native typing indicators. Your customer
+                  sees what they&apos;d see from a friend, because on their
+                  phone, that&apos;s exactly how it looks.
+                </p>
+              </div>
+              <div className="viz">
+                <div className="mini-imessage">
+                  <div className="bubble in" style={{ animationDelay: "0.2s" }}>
+                    are you texting from your personal cell?
+                  </div>
+                  <div className="bubble out" style={{ animationDelay: "0.6s" }}>
+                    Yep — it&apos;s Alex from Aesop 👋
+                  </div>
+                  <div className="bubble out" style={{ animationDelay: "0.8s" }}>
+                    Same number going forward
+                  </div>
+                  <div className="im-status" style={{ animationDelay: "1s" }}>
+                    Delivered · Read now
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Media */}
+            <div className="feat feat-media">
+              <span className="kicker">Images &amp; video</span>
+              <h3>Send the look, not a link.</h3>
+              <p>
+                Share high-quality photos and video clips right in the thread —
+                full resolution, no &ldquo;click to view.&rdquo; The product
+                lands next to the pitch.
+              </p>
+              <div className="viz">
+                <div className="media-viz">
+                  <div className="media-card video">
+                    <span className="tag-pill">Outgoing · Video</span>
+                    <div className="play-badge">
+                      <svg viewBox="0 0 10 10" fill="currentColor">
+                        <path d="M2 1l7 4-7 4z" />
+                      </svg>
+                    </div>
+                    <span className="dur">0:24</span>
+                  </div>
+                  <div className="reply-bubbles">
+                    <div className="bb blue">Your car has arrived 🚗 Check it out</div>
+                    <div className="bb blue">
+                      Keys ready at the front desk whenever you are
+                    </div>
+                    <div className="bb gray">On my way down now — thank you!</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Effects */}
+            <div className="feat feat-effects">
+              <span className="kicker">Effects &amp; reactions</span>
+              <h3>Slam, confetti, tapbacks — all native.</h3>
+              <p>
+                Every iMessage effect Apple ships. Tapbacks that render
+                in-thread on both sides. The playful stuff still feels playful —
+                because it&apos;s the same stuff people send to friends.
+              </p>
+              <div className="viz">
+                <div className="effects">
+                  {[
+                    { emo: "💥", label: "Slam", blue: true },
+                    { emo: "🔊", label: "Loud" },
+                    { emo: "🫧", label: "Gentle" },
+                    { emo: "🫥", label: "Invisible Ink" },
+                    { emo: "🎉", label: "Confetti", blue: true },
+                    { emo: "🎈", label: "Balloons" },
+                    { emo: "❤️", label: "Heart" },
+                    { emo: "👍", label: "Thumbs up" },
+                    { emo: "😂", label: "Haha" },
+                    { emo: "‼️", label: "Emphasis" },
+                  ].map((c) => (
+                    <span key={c.label} className={c.blue ? "chip blue" : "chip"}>
+                      <span className="emo">{c.emo}</span>
+                      {c.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Voice */}
+            <div className="feat feat-voice">
+              <span className="kicker">Voice messages</span>
+              <h3>Founders on the phone, not on email.</h3>
+              <p>
+                Send real iMessage voice notes with waveform playback. Receive
+                inbound the same way. This is the feature that makes
+                founder-led and concierge outreach feel unmistakably human.
+              </p>
+              <div className="viz">
+                <div className="voice-stack">
+                  <div className="voice-msg out">
+                    <div className="play">
+                      <svg viewBox="0 0 10 10">
+                        <path d="M2 1l7 4-7 4z" />
+                      </svg>
+                    </div>
+                    <div className="wave">
+                      {[30, 60, 90, 70, 40, 80, 50, 90, 30, 60, 80, 40, 50, 70, 20, 40, 75, 55].map(
+                        (h, i) => (
+                          <i key={i} style={{ height: `${h}%` }} />
+                        )
+                      )}
+                    </div>
+                    <span className="dur">0:18</span>
+                  </div>
+                  <div className="voice-msg in">
+                    <div className="play">
+                      <svg viewBox="0 0 10 10">
+                        <path d="M2 1l7 4-7 4z" />
+                      </svg>
+                    </div>
+                    <div className="wave">
+                      {[40, 70, 30, 85, 55, 45, 75, 35, 90, 50, 65, 25, 80, 40, 60].map(
+                        (h, i) => (
+                          <i key={i} style={{ height: `${h}%` }} />
+                        )
+                      )}
+                    </div>
+                    <span className="dur">0:09</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Integrations */}
+            <div className="feat feat-ghl">
+              <span className="kicker">Integrations</span>
+              <h3>Plugs into the stack you already run.</h3>
+              <p>
+                Trigger Blu sends from HighLevel workflows. Push conversation
+                data back into contact records. HubSpot, Close, and Salesforce
+                next.
+              </p>
+              <div className="viz">
+                <div className="integration">
+                  <div className="logo-pill active">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/marketing/ghl.svg" alt="HighLevel" />
+                    <span>HighLevel</span>
+                    <span className="status">Live</span>
+                  </div>
+                  <div className="logo-pill soon">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/marketing/hubspot.png" alt="HubSpot" />
+                    <span>HubSpot</span>
+                    <span className="status">Soon</span>
+                  </div>
+                  <div className="logo-pill soon">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/marketing/close.png" alt="Close" />
+                    <span>Close</span>
+                    <span className="status">Soon</span>
+                  </div>
+                  <div className="logo-pill soon">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/marketing/salesforce.png" alt="Salesforce" />
+                    <span>Salesforce</span>
+                    <span className="status">Soon</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Reply-rate analytics */}
+            <div className="feat feat-analytics wide">
+              <div className="copy">
+                <span className="kicker">Reply rate · the metric that matters</span>
+                <span className="hero-lift">3×</span>
+                <div className="hero-lift-sub">Average lift in reply rate</div>
+                <h3>
+                  Blue bubbles get{" "}
+                  <em
+                    style={{
+                      fontFamily: "'Instrument Serif',serif",
+                      color: "var(--blu)",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    answered
+                  </em>
+                  .
+                </h3>
+                <p>
+                  When messages read as a conversation, customers treat them
+                  like one. Across aggregate Blu customer data, brands see a{" "}
+                  <b style={{ color: "var(--blu)", fontWeight: 600 }}>
+                    3× lift
+                  </b>{" "}
+                  in replies compared to the same list over SMS.
+                </p>
+              </div>
+              <div className="viz">
+                <div className="reply-compare">
+                  <div className="rc-row sms">
+                    <div className="rc-label">
+                      SMS<small>shortcode blast</small>
+                    </div>
+                    <div className="rc-bar">
+                      <i />
+                    </div>
+                    <div className="rc-num">10%</div>
+                  </div>
+                  <div className="rc-row imsg">
+                    <div className="rc-label">
+                      iMessage<small>via Blu</small>
+                    </div>
+                    <div className="rc-bar">
+                      <i />
+                    </div>
+                    <div className="rc-num">30%</div>
+                  </div>
+                  <div className="rc-caption">
+                    Aggregate Blu customer data · reply rate benchmark.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ TESTIMONIAL ═══ */}
+      <section className="testimonial" id="customers">
+        <div className="container rise-group">
+          <div className="story rise">
+            <div className="label">Customer story · Concierge medicine</div>
+            <div>
+              <div className="brand-name">Nicholas Venazio</div>
+              <div className="brand-meta">
+                Owner · concierge medicine chain · $4M/yr
+              </div>
+            </div>
+            <blockquote>
+              &ldquo;Our members expect a text back from a real person. Blu made
+              that possible at scale — <em>reply rates tripled</em> and our
+              front desk finally stopped drowning in voicemails.&rdquo;
+            </blockquote>
+            <cite>
+              <b>Nicholas Venazio</b>
+              Owner, concierge medicine chain
+            </cite>
+          </div>
+          <div className="story rise">
+            <div className="label">Customer story · DTC · Shopify</div>
+            <div>
+              <div className="brand-name">Scott Simmons</div>
+              <div className="brand-meta">
+                Founder · protein cookie brand · 8-figure DTC
+              </div>
+            </div>
+            <blockquote>
+              &ldquo;Winback over SMS was dead on arrival. On Blu, the same
+              flow pulled <em>30%+ reply rates</em> and customers started
+              telling us which flavor to launch next — in the thread.&rdquo;
+            </blockquote>
+            <cite>
+              <b>Scott Simmons</b>
+              Founder, protein cookie brand (Shopify DTC)
+            </cite>
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ FINAL CTA ═══ */}
+      <section className="final" id="pricing">
+        <div className="container rise">
+          <span className="eyebrow">Ready?</span>
+          <h2 className="display" style={{ marginTop: 18 }}>
+            Put a <em>person</em> back in the conversation.
+          </h2>
+          <p className="lead">
+            Book a 30-minute demo. We&apos;ll provision a live number and send
+            you a real iMessage from it before the call ends — founder to
+            founder.
+          </p>
+          <div className="cta-row">
+            <a
+              className="btn primary"
+              href="/demo"
+              data-iclosed-link="https://app.iclosed.io/e/blutext/imessage-demo"
+              data-embed-type="popup"
+            >
+              Book a demo <span className="arrow">→</span>
+            </a>
+            <a className="btn ghost" href="/signup">
+              Sign up
+            </a>
+          </div>
+          <div className="note">No apps. No shortcodes. Just real iMessage.</div>
+        </div>
+      </section>
+
+      <MarketingFooter />
     </div>
   );
 }
