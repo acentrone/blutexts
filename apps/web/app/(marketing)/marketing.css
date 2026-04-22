@@ -1083,6 +1083,15 @@
     grid-template-columns: 1fr !important;
   }
   .marketing-page .feat-grid { grid-template-columns: 1fr; }
+  /* CRITICAL: the .wide cards still have `grid-column: span 2` from the
+     desktop rule. CSS Grid honors that even when the parent is set to a
+     single column — it auto-creates an implicit 2nd column to fit the
+     spanning card, which then squeezes the regular cards into a tiny
+     first track. Reset the placement so every card sits in one column. */
+  .marketing-page .feat.wide,
+  .marketing-page .feat-analytics.wide {
+    grid-column: auto !important;
+  }
   .marketing-page .feat.wide .mini-imessage { margin-left: 0; }
   .marketing-page .how .flow { grid-template-columns: 1fr; }
   .marketing-page .how .arrow-sep { transform: rotate(90deg); padding: 8px 0; }
