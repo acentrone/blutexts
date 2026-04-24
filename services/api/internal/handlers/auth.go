@@ -55,11 +55,15 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create account
+	// Create account in 'pending' state — the subscription gate blocks every
+	// gated route (messages/send, contacts, calls, ws-broadcast, etc.) until
+	// the Stripe webhook flips status → 'setting_up' on checkout.completed.
+	// Anything that lands here without paying is harmless: they have a JWT
+	// and a /me payload, but every product surface returns 402.
 	accountID := uuid.New()
 	_, err = h.db.Exec(r.Context(), `
 		INSERT INTO accounts (id, name, email, status, plan, preferred_area_code, created_at, updated_at)
-		VALUES ($1, $2, $3, 'active', 'free', $4, NOW(), NOW())
+		VALUES ($1, $2, $3, 'pending', 'free', $4, NOW(), NOW())
 	`, accountID, req.Company, req.Email, req.PreferredAreaCode)
 	if err != nil {
 		writeError(w, "could not create account", http.StatusInternalServerError)

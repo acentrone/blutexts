@@ -1,17 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import useSWR from "swr";
-import {
-  MessageCircleIcon,
-  TrendingUpIcon,
-  UsersIcon,
-  SendIcon,
-  AlertCircleIcon,
-  CheckCircle2Icon,
-  ClockIcon,
-  ExternalLinkIcon,
-} from "lucide-react";
 import Link from "next/link";
 
 const API = process.env.NEXT_PUBLIC_API_URL;
@@ -42,6 +31,7 @@ interface DashboardStats {
 }
 
 interface AccountInfo {
+  user: { email: string; first_name?: string };
   account: {
     id: string;
     name: string;
@@ -51,309 +41,324 @@ interface AccountInfo {
   };
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const configs: Record<string, { label: string; class: string; dot: string }> = {
-    active: {
-      label: "Active",
-      class: "bg-green-50 text-green-700 border-green-100",
-      dot: "bg-green-500",
-    },
-    setting_up: {
-      label: "Setting Up",
-      class: "bg-yellow-50 text-yellow-700 border-yellow-100",
-      dot: "bg-yellow-400",
-    },
-    past_due: {
-      label: "Payment Past Due",
-      class: "bg-red-50 text-red-700 border-red-100",
-      dot: "bg-red-500",
-    },
-    pending: {
-      label: "Pending Setup",
-      class: "bg-gray-50 text-gray-600 border-gray-100",
-      dot: "bg-gray-400",
-    },
+interface PhoneInfo {
+  has_number: boolean;
+  phone?: {
+    number: string;
+    imessage_address: string | null;
+    display_name: string | null;
+    status: string;
+    device_name: string | null;
+    device_status: string | null;
+    device_last_seen: string | null;
   };
-
-  const cfg = configs[status] || configs.pending;
-
-  return (
-    <div className={`inline-flex items-center gap-2 border rounded-full px-3 py-1.5 text-sm font-medium ${cfg.class}`}>
-      <span className={`w-2 h-2 rounded-full animate-pulse ${cfg.dot}`} />
-      {cfg.label}
-    </div>
-  );
 }
 
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-  color = "blue",
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string | number;
-  sub?: string;
-  color?: "blue" | "green" | "purple" | "orange";
-}) {
-  const colors = {
-    blue: "bg-blue-50 text-[#007AFF]",
-    green: "bg-green-50 text-green-600",
-    purple: "bg-purple-50 text-purple-600",
-    orange: "bg-orange-50 text-orange-600",
-  };
+interface GHLStatus {
+  connected: boolean;
+  location_id?: string;
+}
 
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 p-6 hover:border-blue-100 transition-colors">
-      <div className="flex items-start justify-between mb-4">
-        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${colors[color]}`}>
-          <Icon className="w-5 h-5" />
-        </div>
-      </div>
-      <div className="text-3xl font-bold text-gray-900 mb-1">{value}</div>
-      <div className="text-sm text-gray-500">{label}</div>
-      {sub && <div className="text-xs text-gray-400 mt-1">{sub}</div>}
-    </div>
-  );
+function formatPhone(s: string): string {
+  const d = s.replace(/\D/g, "");
+  if (d.length === 11 && d[0] === "1") {
+    return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+  }
+  if (d.length === 10) {
+    return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  }
+  return s;
 }
 
 export default function DashboardPage() {
   const { data: meData } = useSWR<AccountInfo>(`${API}/api/auth/me`, fetcher);
-  const { data: stats, isLoading } = useSWR<DashboardStats>(
+  const { data: stats } = useSWR<DashboardStats>(
     `${API}/api/dashboard/stats`,
     fetcher,
     { refreshInterval: 30000 }
   );
+  const { data: phoneData } = useSWR<PhoneInfo>(
+    `${API}/api/account/info`,
+    fetcher,
+    { refreshInterval: 15000 }
+  );
+  const { data: ghlStatus } = useSWR<GHLStatus>(
+    meData?.account ? `${API}/api/integration/status` : null,
+    fetcher,
+    { refreshInterval: 15000 }
+  );
+  // Latest Mac DMG (from agent_releases). Public endpoint — no auth required.
+  // Powers the "Download for Mac" CTA in the setup checklist.
+  const { data: agentRelease } = useSWR<{ download_url?: string; version?: string }>(
+    `${API}/api/agent/version`,
+    (url: string) => fetch(url).then((r) => (r.ok ? r.json() : {})),
+  );
+  const dmgURL = agentRelease?.download_url ?? null;
 
   const account = meData?.account;
-  const isSettingUp = account?.status === "setting_up" || account?.status === "pending";
-
-  // Check GHL connection status
-  const { data: ghlStatus } = useSWR(
-    account ? `${API}/api/integration/status?account_id=${account.id}` : null,
-    fetcher
-  );
   const ghlConnected = ghlStatus?.connected === true;
+  const hasNumber = phoneData?.has_number === true;
+  const deviceOnline = phoneData?.phone?.device_status === "online";
+  const setupComplete = hasNumber && deviceOnline && ghlConnected;
+  const completedCount = [hasNumber, deviceOnline, ghlConnected].filter(Boolean).length;
+  const progressClass =
+    completedCount === 3 ? "progress-100" : completedCount === 2 ? "progress-66" : completedCount === 1 ? "progress-33" : "progress-0";
+
+  const dailyPct =
+    stats && stats.daily_limit > 0
+      ? Math.min((stats.today_new_contacts / stats.daily_limit) * 100, 100)
+      : 0;
+  const remaining = stats ? stats.daily_limit - stats.today_new_contacts : 0;
+
+  async function connectGHL() {
+    if (!account) return;
+    const token = localStorage.getItem("access_token");
+    const res = await fetch(
+      `${API}/api/oauth/connect?account_id=${account.id}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await res.json();
+    if (data.url) window.location.href = data.url;
+  }
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            {account ? `Welcome back, ${account.name}` : "Dashboard"}
+    <>
+      <header className="page-header">
+        <div className="titles">
+          <div className="crumb">Home</div>
+          <h1>
+            Welcome back,{" "}
+            <em>{meData?.user?.first_name || account?.name || "Admin"}</em>.
           </h1>
-          <p className="text-gray-500 text-sm mt-1">Last 30 days overview</p>
-        </div>
-        {account && <StatusBadge status={account.status} />}
-      </div>
-
-      {/* Setup banner */}
-      {isSettingUp && (
-        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6 flex items-start gap-4">
-          <div className="w-10 h-10 bg-[#007AFF] rounded-xl flex items-center justify-center flex-shrink-0">
-            <ClockIcon className="w-5 h-5 text-white" />
+          <div className="sub">
+            {setupComplete
+              ? "Everything's running smoothly."
+              : "Let's finish setting up your account."}
           </div>
-          <div>
-            <h3 className="font-semibold text-gray-900 mb-1">
-              We're setting up your account
-            </h3>
-            <p className="text-sm text-gray-600 mb-3">
-              Your dedicated phone number is being provisioned and your Go High Level
-              integration is being configured. This typically takes 15–30 minutes.
-              We'll email you as soon as you're live.
-            </p>
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-1.5 text-[#007AFF]">
-                <CheckCircle2Icon className="w-4 h-4" />
-                Payment confirmed
-              </div>
-              <div className="flex items-center gap-1.5 text-yellow-600">
-                <ClockIcon className="w-4 h-4" />
-                Number provisioning
-              </div>
-              <div className="flex items-center gap-1.5 text-gray-400">
-                <ClockIcon className="w-4 h-4" />
-                GHL integration
-              </div>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Link href="/messages" className="btn secondary">
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M10 3v14M3 10h14" strokeLinecap="round" />
+            </svg>
+            New message
+          </Link>
+        </div>
+      </header>
+
+      <div className="page-body">
+        {!setupComplete && (
+          <div className={`checklist-card ${progressClass}`}>
+            <div className="title-row">
+              <h3>Getting started</h3>
+              <span className="progress-text">{completedCount} / 3 complete</span>
+            </div>
+            <div className="sub">Complete these steps to start sending iMessages.</div>
+
+            <div className="checklist">
+              <Step
+                done={hasNumber}
+                title="Phone number assigned"
+                desc={
+                  hasNumber && phoneData?.phone
+                    ? <>Your dedicated number: <b>{formatPhone(phoneData.phone.number)}</b></>
+                    : "Waiting for our team to assign your dedicated iMessage number."
+                }
+              />
+              <Step
+                done={deviceOnline}
+                active={hasNumber && !deviceOnline}
+                title="Install the Mac app"
+                desc={
+                  deviceOnline && phoneData?.phone
+                    ? <><b>{phoneData.phone.device_name}</b> is connected and ready.</>
+                    : hasNumber
+                    ? <>Download the BluTexts Mac app and sign in with your account credentials. The app runs in the background and sends from your dedicated number.</>
+                    : <>Install the Mac app now — it&apos;ll connect automatically once your number is assigned.</>
+                }
+                ctaLabel={!deviceOnline && dmgURL ? "Download for Mac" : undefined}
+                ctaHref={!deviceOnline && dmgURL ? dmgURL : undefined}
+              />
+              <Step
+                done={ghlConnected}
+                active={!ghlConnected && hasNumber}
+                title="HighLevel connected"
+                desc={
+                  ghlConnected
+                    ? "Messages will sync to your GHL location."
+                    : "Connect your GHL account to enable message sync."
+                }
+                ctaLabel={!ghlConnected ? "Connect →" : undefined}
+                onCtaClick={!ghlConnected ? connectGHL : undefined}
+              />
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* GHL connection status */}
-      {account?.status === "active" && !ghlConnected && (
-        <div className="bg-amber-50 border border-amber-100 rounded-2xl p-6 flex items-start gap-4">
-          <AlertCircleIcon className="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 mb-1">Connect Go High Level</h3>
-            <p className="text-sm text-gray-600 mb-3">Connect your GHL account to enable bidirectional message sync.</p>
-            <button
-              onClick={async () => {
-                const token = localStorage.getItem("access_token");
-                const res = await fetch(`${API}/api/oauth/connect?account_id=${account.id}`, {
-                  headers: { Authorization: `Bearer ${token}` },
-                });
-                const data = await res.json();
-                if (data.url) window.location.href = data.url;
-              }}
-              className="inline-flex items-center gap-1.5 bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-amber-600 transition-colors"
-            >
-              Connect GHL
-              <ExternalLinkIcon className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {account?.status === "active" && ghlConnected && (
-        <div className="bg-green-50 border border-green-100 rounded-2xl p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <CheckCircle2Icon className="w-5 h-5 text-green-600" />
+        {hasNumber && phoneData?.phone && (
+          <div className="number-card">
             <div>
-              <div className="text-sm font-medium text-green-800">Go High Level connected</div>
-              {ghlStatus?.location_id && <div className="text-xs text-green-600">Location: {ghlStatus.location_id}</div>}
+              <div className="lbl">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path
+                    d="M4.5 1h5l1 2.5-1.5 1a9 9 0 004 4l1-1.5L13 8v4.5a.5.5 0 01-.5.5C6 13 1 8 1 1.5A.5.5 0 011.5 1H4.5z"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Your Blu number
+              </div>
+              <div className="num">{formatPhone(phoneData.phone.number)}</div>
+              <div className="sub">
+                Primary · dedicated to your workspace
+                {phoneData.phone.display_name ? ` · ${phoneData.phone.display_name}` : ""}
+              </div>
+            </div>
+            <div className="device">
+              <span className={`pill${deviceOnline ? " online" : ""}`}>
+                <span className="d" /> {deviceOnline ? "Online" : "Offline"}
+              </span>
+              {phoneData.phone.device_name && (
+                <span className="did">{phoneData.phone.device_name}</span>
+              )}
             </div>
           </div>
-          <button
-            onClick={async () => {
-              const token = localStorage.getItem("access_token");
-              await fetch(`${API}/api/integration/disconnect?account_id=${account.id}`, {
-                method: "DELETE",
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              window.location.reload();
-            }}
-            className="text-xs text-red-500 hover:underline"
-          >
-            Disconnect
-          </button>
-        </div>
-      )}
+        )}
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          icon={SendIcon}
-          label="Messages sent"
-          value={isLoading ? "—" : (stats?.total_sent ?? 0).toLocaleString()}
-          sub="Last 30 days"
-          color="blue"
-        />
-        <StatCard
-          icon={CheckCircle2Icon}
-          label="Delivered"
-          value={isLoading ? "—" : (stats?.total_delivered ?? 0).toLocaleString()}
-          sub={
-            stats && stats.total_sent > 0
-              ? `${Math.round((stats.total_delivered / stats.total_sent) * 100)}% rate`
-              : undefined
-          }
-          color="green"
-        />
-        <StatCard
-          icon={MessageCircleIcon}
-          label="Replies received"
-          value={isLoading ? "—" : (stats?.total_replied ?? 0).toLocaleString()}
-          sub={
-            stats?.response_rate != null
-              ? `${stats.response_rate.toFixed(1)}% response rate`
-              : undefined
-          }
-          color="purple"
-        />
-        <StatCard
-          icon={UsersIcon}
-          label="New contacts today"
-          value={
-            isLoading
-              ? "—"
-              : `${stats?.today_new_contacts ?? 0}/${stats?.daily_limit ?? 50}`
-          }
-          sub="Daily limit"
-          color="orange"
-        />
-      </div>
-
-      {/* Daily limit progress */}
-      {stats && (
-        <div className="bg-white rounded-2xl border border-gray-100 p-6">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="font-semibold text-gray-900">Daily new contact limit</h3>
-              <p className="text-sm text-gray-500 mt-0.5">
-                {stats.today_new_contacts} of {stats.daily_limit} new contacts messaged today
-              </p>
+        <div className="stats">
+          <div className="stat">
+            <div className="ico">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M1.5 8L14.5 2 10 14.5l-2-6-6.5-.5z" strokeLinejoin="round" />
+              </svg>
             </div>
-            <span className="text-sm font-medium text-gray-500">
-              {stats.daily_limit - stats.today_new_contacts} remaining
-            </span>
+            <div className="n">{(stats?.total_sent ?? 0).toLocaleString()}</div>
+            <div className="label">Messages sent</div>
+            <div className="sub">Last 30 days</div>
           </div>
-          <div className="w-full bg-gray-100 rounded-full h-2.5">
-            <div
-              className={`h-2.5 rounded-full transition-all ${
-                stats.today_new_contacts / stats.daily_limit > 0.9
-                  ? "bg-red-500"
-                  : stats.today_new_contacts / stats.daily_limit > 0.7
-                  ? "bg-yellow-400"
-                  : "bg-[#007AFF]"
-              }`}
-              style={{
-                width: `${Math.min(
-                  (stats.today_new_contacts / stats.daily_limit) * 100,
-                  100
-                )}%`,
-              }}
-            />
+
+          <div className="stat success">
+            <div className="ico">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M5.5 8l2 2 3.5-3.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div className="n">{(stats?.total_delivered ?? 0).toLocaleString()}</div>
+            <div className="label">Delivered</div>
+            {stats && stats.total_sent > 0 && (
+              <div className="sub">
+                {Math.round((stats.total_delivered / stats.total_sent) * 100)}% delivery rate
+              </div>
+            )}
           </div>
-          <p className="text-xs text-gray-400 mt-2">
-            Resets at midnight. Existing conversation replies are unlimited.
-          </p>
+
+          <div className="stat purple">
+            <div className="ico">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M2.5 4a2 2 0 012-2h7a2 2 0 012 2v5a2 2 0 01-2 2h-5l-4 3V4z" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div className="n">{(stats?.total_replied ?? 0).toLocaleString()}</div>
+            <div className="label">Replies received</div>
+            {stats?.response_rate != null && stats.total_sent > 0 && (
+              <div className="sub">{stats.response_rate.toFixed(1)}% reply rate</div>
+            )}
+          </div>
+
+          <div className="stat amber">
+            <div className="ico">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="6" cy="5.5" r="2.5" />
+                <path
+                  d="M1 13c.5-2.5 2.3-4 5-4s4.5 1.5 5 4M12 2.5a2.5 2.5 0 010 5M15 13c-.3-2-.8-3.5-2.5-4"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+            <div className="n">
+              {stats?.today_new_contacts ?? 0}
+              <span style={{ fontSize: 20, color: "var(--muted)", fontWeight: 500 }}>
+                /{stats?.daily_limit ?? 50}
+              </span>
+            </div>
+            <div className="label">New contacts today</div>
+            <div className="sub">Daily limit</div>
+            {stats && (
+              <span className="trend flat">{remaining} remaining</span>
+            )}
+          </div>
         </div>
-      )}
 
-      {/* Quick links */}
-      <div className="grid md:grid-cols-3 gap-4">
-        <Link
-          href="/messages"
-          className="bg-white border border-gray-100 rounded-2xl p-6 hover:border-blue-100 hover:shadow-md hover:shadow-blue-50 transition-all group"
-        >
-          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center mb-4 group-hover:bg-[#007AFF] transition-colors">
-            <MessageCircleIcon className="w-5 h-5 text-[#007AFF] group-hover:text-white transition-colors" />
+        {stats && stats.daily_limit > 0 && (
+          <div className="limit-card">
+            <div className="head">
+              <div>
+                <h4>Daily new contact limit</h4>
+                <div className="sub">
+                  {stats.today_new_contacts} of {stats.daily_limit} new contacts messaged today
+                </div>
+              </div>
+              <div className="remaining">{remaining} remaining</div>
+            </div>
+            <div className="bar">
+              <i style={{ width: `${dailyPct}%` }} />
+            </div>
+            <div className="foot">
+              Resets at midnight · Existing conversation replies are unlimited.
+            </div>
           </div>
-          <h3 className="font-semibold text-gray-900 mb-1">Messages</h3>
-          <p className="text-sm text-gray-500">
-            {stats?.active_conversations ?? 0} active conversation
-            {stats?.active_conversations !== 1 ? "s" : ""}
-          </p>
-        </Link>
-
-        <Link
-          href="/billing"
-          className="bg-white border border-gray-100 rounded-2xl p-6 hover:border-blue-100 hover:shadow-md hover:shadow-blue-50 transition-all group"
-        >
-          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center mb-4 group-hover:bg-[#007AFF] transition-colors">
-            <TrendingUpIcon className="w-5 h-5 text-[#007AFF] group-hover:text-white transition-colors" />
-          </div>
-          <h3 className="font-semibold text-gray-900 mb-1">Billing</h3>
-          <p className="text-sm text-gray-500 capitalize">
-            {account?.plan ?? "—"} plan
-          </p>
-        </Link>
-
-        <a
-          href="mailto:support@blutexts.com"
-          className="bg-white border border-gray-100 rounded-2xl p-6 hover:border-blue-100 hover:shadow-md hover:shadow-blue-50 transition-all group"
-        >
-          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center mb-4 group-hover:bg-[#007AFF] transition-colors">
-            <AlertCircleIcon className="w-5 h-5 text-[#007AFF] group-hover:text-white transition-colors" />
-          </div>
-          <h3 className="font-semibold text-gray-900 mb-1">Support</h3>
-          <p className="text-sm text-gray-500">support@blutexts.com</p>
-        </a>
+        )}
       </div>
+    </>
+  );
+}
+
+function Step({
+  done,
+  active,
+  title,
+  desc,
+  ctaLabel,
+  ctaHref,
+  onCtaClick,
+}: {
+  done: boolean;
+  active?: boolean;
+  title: string;
+  desc: React.ReactNode;
+  ctaLabel?: string;
+  ctaHref?: string;
+  onCtaClick?: () => void;
+}) {
+  const cls = done ? "step done" : active ? "step active" : "step pending";
+  return (
+    <div className={cls}>
+      <div className="marker">
+        {done && (
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M2.5 6.5l2.5 2.5L9.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </div>
+      <div className="body">
+        <div className="name">{title}</div>
+        <div className="desc">{desc}</div>
+      </div>
+      {ctaLabel && ctaHref && (
+        <Link className="cta" href={ctaHref}>
+          {ctaLabel}
+        </Link>
+      )}
+      {ctaLabel && onCtaClick && (
+        <button
+          className="cta"
+          onClick={onCtaClick}
+          type="button"
+          style={{ background: "none", border: 0, cursor: "pointer" }}
+        >
+          {ctaLabel}
+        </button>
+      )}
     </div>
   );
 }

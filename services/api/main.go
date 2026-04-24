@@ -95,6 +95,16 @@ func main() {
 	ghlProvisioner := ghl.NewProvisioner(pool, ghlClient, cfg.AppURL, encryptor)
 	ghlSyncer := ghl.NewSyncer(pool, ghlClient, encryptor)
 
+	// Email service is initialized BEFORE Stripe so the onAccountActivated
+	// closure (defined below) can capture it. Optional — when RESEND_API_KEY
+	// is empty the service logs to stdout instead of sending.
+	emailSvc := emailService.New(cfg.ResendAPIKey, cfg.FromEmail, cfg.AppURL)
+	if emailSvc.Enabled() {
+		log.Println("Resend email enabled")
+	} else {
+		log.Println("Resend email disabled — logging emails to stdout")
+	}
+
 	// Stripe is optional — skip in testing/free mode
 	var billing *stripeService.BillingService
 	var stripeWebhookHandler *stripeService.WebhookHandler
@@ -106,9 +116,52 @@ func main() {
 		}
 		billing = stripeService.NewBillingService(cfg.StripeSecretKey, stripePlans, cfg.AppURL)
 
+		// Fired by stripe webhook on checkout.session.completed AFTER it has
+		// already flipped the account to status='setting_up'. We do the
+		// "tell the customer + page the founder" side-effects here.
+		//
+		// Number provisioning itself is still a manual founder step (Apple
+		// identity verification) — the email to centroneaj@gmail.com is the
+		// page so nobody is left waiting in an empty dashboard.
 		onAccountActivated := func(ctx context.Context, accountID uuid.UUID) {
-			log.Printf("Account activated: %s — triggering provisioning", accountID)
-			pool.Exec(ctx, `UPDATE accounts SET status = 'active', updated_at = NOW() WHERE id = $1`, accountID)
+			log.Printf("Account activated: %s — sending welcome + provisioning alert", accountID)
+
+			// Pull the customer + the latest active DMG release in one round-trip.
+			var customerEmail, firstName, company, areaCode, dmgURL string
+			err := pool.QueryRow(ctx, `
+				SELECT
+				  u.email,
+				  u.first_name,
+				  a.name,
+				  COALESCE(a.preferred_area_code, ''),
+				  COALESCE((SELECT download_url FROM agent_releases WHERE active = true ORDER BY created_at DESC LIMIT 1), '')
+				FROM accounts a
+				JOIN users u ON u.account_id = a.id AND u.role = 'owner'
+				WHERE a.id = $1
+				LIMIT 1
+			`, accountID).Scan(&customerEmail, &firstName, &company, &areaCode, &dmgURL)
+			if err != nil {
+				log.Printf("onAccountActivated lookup failed for %s: %v", accountID, err)
+				return
+			}
+
+			// Welcome the customer (best-effort — failure is logged, not fatal)
+			if err := emailSvc.SendWelcome(customerEmail, firstName, dmgURL); err != nil {
+				log.Printf("welcome email failed for %s: %v", customerEmail, err)
+			}
+
+			// Page the founder so the manual number-assignment step happens
+			fullName := firstName
+			if fullName == "" {
+				fullName = customerEmail
+			}
+			if err := emailSvc.SendProvisioningAlert(
+				cfg.OpsAlertEmail,
+				customerEmail, fullName, company, areaCode,
+				accountID.String(),
+			); err != nil {
+				log.Printf("provisioning alert failed for %s: %v", accountID, err)
+			}
 		}
 		stripeWebhookHandler = stripeService.NewWebhookHandler(
 			pool, cfg.StripeWebhookSecret, billing, onAccountActivated,
@@ -124,6 +177,7 @@ func main() {
 	authMw := middleware.NewAuthMiddleware(cfg.JWTSecret)
 	adminKeyMw := middleware.NewAdminAuth(cfg.AdminAPIKey, authMw)
 	subGate := middleware.NewSubscriptionGate(pool)
+	rateLimit := middleware.NewRateLimiter(rdb)
 
 	// Storage (R2 — optional; media features are disabled if not configured)
 	r2Client := storage.NewR2Client()
@@ -139,13 +193,6 @@ func main() {
 		log.Println("Agora voice configured — FaceTime Audio calling enabled")
 	} else {
 		log.Println("Agora voice not configured — calling disabled")
-	}
-
-	emailSvc := emailService.New(cfg.ResendAPIKey, cfg.FromEmail, cfg.AppURL)
-	if emailSvc.Enabled() {
-		log.Println("Resend email enabled")
-	} else {
-		log.Println("Resend email disabled — logging emails to stdout")
 	}
 
 	authHandler := handlers.NewAuthHandler(pool, cfg.JWTSecret, cfg.JWTRefreshSecret, emailSvc)
@@ -212,12 +259,25 @@ func main() {
 	})
 
 	// ── Auth ──────────────────────────────────────────────────
+	// Rate limits below are intentionally generous for legit users + tight
+	// enough that abuse hits a wall fast. Numbers picked from observed
+	// Auth0/Clerk defaults + adjusted for our self-serve volume.
+	//
+	//   register   : 5/IP/15min   — typical user signs up once, ever
+	//   login      : 10/IP/15min  — leaves room for typo-fest, blocks brute force
+	//   forgot-pwd : 5/IP/hour    + 3/email/hour (per-email blocks reset spam)
+	//   webhook    : 60/IP/min    — GHL bursts on bulk operations; unauth path
 	r.Route("/api/auth", func(r chi.Router) {
-		r.Post("/register", authHandler.Register)
-		r.Post("/login", authHandler.Login)
+		r.With(rateLimit.Limit(5, 15*time.Minute, middleware.IPKey)).
+			Post("/register", authHandler.Register)
+		r.With(rateLimit.Limit(10, 15*time.Minute, middleware.IPKey)).
+			Post("/login", authHandler.Login)
 		r.Post("/refresh", authHandler.Refresh)
 		r.Post("/logout", authHandler.Logout)
-		r.Post("/forgot-password", authHandler.ForgotPassword)
+		r.With(
+			rateLimit.Limit(5, time.Hour, middleware.IPKey),
+			rateLimit.LimitByEmail(3, time.Hour),
+		).Post("/forgot-password", authHandler.ForgotPassword)
 		r.Post("/reset-password", authHandler.ResetPassword)
 		r.Post("/accept-invite", teamHandler.AcceptInvite)
 		r.With(authMw.Authenticate).Get("/me", authHandler.Me)
@@ -306,7 +366,12 @@ func main() {
 	if stripeWebhookHandler != nil {
 		r.Post("/api/webhooks/stripe", stripeWebhookHandler.Handle)
 	}
-	r.Post("/api/webhooks/inbound", ghlHandler.HandleWebhook)
+	// Inbound is unauthenticated (GHL signs with HMAC, verified inside the
+	// handler) — rate-limit per-IP so a misbehaving sender can't flood.
+	// Stripe webhooks aren't limited because Stripe's IPs are well-known
+	// and they retry aggressively on 429.
+	r.With(rateLimit.Limit(60, time.Minute, middleware.IPKey)).
+		Post("/api/webhooks/inbound", ghlHandler.HandleWebhook)
 
 	// ── Admin (API key auth) ──────────────────────────────────
 	r.Route("/api/admin", func(r chi.Router) {

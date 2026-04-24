@@ -35,6 +35,10 @@ type Config struct {
 	// Resend (transactional email — logs to stdout when empty)
 	ResendAPIKey string
 	FromEmail    string
+	// Where ops alerts go (new-paid-customer-needs-a-number, etc.).
+	// Defaults to centroneaj@gmail.com so the founder is always paged
+	// even if the env var was forgotten in a fresh deploy.
+	OpsAlertEmail string
 
 	// Agora Voice (FaceTime Audio bridge — calling is disabled when empty)
 	AgoraAppID         string
@@ -70,8 +74,9 @@ func Load() (*Config, error) {
 		EncryptionKey: os.Getenv("ENCRYPTION_KEY"),
 
 		// Resend (optional — logs emails when empty)
-		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
-		FromEmail:    getEnv("FROM_EMAIL", "BluTexts <noreply@blutexts.com>"),
+		ResendAPIKey:  os.Getenv("RESEND_API_KEY"),
+		FromEmail:     getEnv("FROM_EMAIL", "BluTexts <noreply@blutexts.com>"),
+		OpsAlertEmail: getEnv("OPS_ALERT_EMAIL", "centroneaj@gmail.com"),
 
 		// Agora (optional — calling feature disabled when either is empty)
 		AgoraAppID:          os.Getenv("AGORA_APP_ID"),
