@@ -87,13 +87,6 @@ export default function DashboardPage() {
     fetcher,
     { refreshInterval: 15000 }
   );
-  // Latest Mac DMG (from agent_releases). Public endpoint — no auth required.
-  // Powers the "Download for Mac" CTA in the setup checklist.
-  const { data: agentRelease } = useSWR<{ download_url?: string; version?: string }>(
-    `${API}/api/agent/version`,
-    (url: string) => fetch(url).then((r) => (r.ok ? r.json() : {})),
-  );
-  const dmgURL = agentRelease?.download_url ?? null;
 
   const account = meData?.account;
   const ghlConnected = ghlStatus?.connected === true;
@@ -168,16 +161,14 @@ export default function DashboardPage() {
               <Step
                 done={deviceOnline}
                 active={hasNumber && !deviceOnline}
-                title="Install the Mac app"
+                title="Sending device online"
                 desc={
-                  deviceOnline && phoneData?.phone
-                    ? <><b>{phoneData.phone.device_name}</b> is connected and ready.</>
+                  deviceOnline
+                    ? <>Your dedicated iPhone is connected and ready to send.</>
                     : hasNumber
-                    ? <>Download the BluTexts Mac app and sign in with your account credentials. The app runs in the background and sends from your dedicated number.</>
-                    : <>Install the Mac app now — it&apos;ll connect automatically once your number is assigned.</>
+                    ? <>Your hosted iPhone is briefly offline — our team is bringing it back up. No action needed on your end. If this persists more than 30 minutes, ping <a href="mailto:hello@blutexts.com">support</a>.</>
+                    : <>Activates automatically once your number is assigned. BluTexts hosts the iPhone — there&apos;s nothing to install.</>
                 }
-                ctaLabel={!deviceOnline && dmgURL ? "Download for Mac" : undefined}
-                ctaHref={!deviceOnline && dmgURL ? dmgURL : undefined}
               />
               <Step
                 done={ghlConnected}

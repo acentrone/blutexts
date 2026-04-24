@@ -120,33 +120,32 @@ func main() {
 		// already flipped the account to status='setting_up'. We do the
 		// "tell the customer + page the founder" side-effects here.
 		//
-		// Number provisioning itself is still a manual founder step (Apple
-		// identity verification) — the email to centroneaj@gmail.com is the
-		// page so nobody is left waiting in an empty dashboard.
+		// Number provisioning + iPhone assignment is a manual ops step
+		// (BluTexts hosts the iPhone fleet that backs every customer line)
+		// — the email to centroneaj@gmail.com is the page so nobody is
+		// left waiting in an empty dashboard.
 		onAccountActivated := func(ctx context.Context, accountID uuid.UUID) {
 			log.Printf("Account activated: %s — sending welcome + provisioning alert", accountID)
 
-			// Pull the customer + the latest active DMG release in one round-trip.
-			var customerEmail, firstName, company, areaCode, dmgURL string
+			var customerEmail, firstName, company, areaCode string
 			err := pool.QueryRow(ctx, `
 				SELECT
 				  u.email,
 				  u.first_name,
 				  a.name,
-				  COALESCE(a.preferred_area_code, ''),
-				  COALESCE((SELECT download_url FROM agent_releases WHERE active = true ORDER BY created_at DESC LIMIT 1), '')
+				  COALESCE(a.preferred_area_code, '')
 				FROM accounts a
 				JOIN users u ON u.account_id = a.id AND u.role = 'owner'
 				WHERE a.id = $1
 				LIMIT 1
-			`, accountID).Scan(&customerEmail, &firstName, &company, &areaCode, &dmgURL)
+			`, accountID).Scan(&customerEmail, &firstName, &company, &areaCode)
 			if err != nil {
 				log.Printf("onAccountActivated lookup failed for %s: %v", accountID, err)
 				return
 			}
 
 			// Welcome the customer (best-effort — failure is logged, not fatal)
-			if err := emailSvc.SendWelcome(customerEmail, firstName, dmgURL); err != nil {
+			if err := emailSvc.SendWelcome(customerEmail, firstName); err != nil {
 				log.Printf("welcome email failed for %s: %v", customerEmail, err)
 			}
 

@@ -37,17 +37,6 @@ function OnboardingSuccessContent() {
 
   const [state, setState] = useState<"polling" | "ready" | "timeout" | "unauthenticated">("polling");
   const [attempt, setAttempt] = useState(0);
-  const [dmgURL, setDmgURL] = useState<string | null>(null);
-
-  // Fetch the latest Mac DMG URL from /api/agent/version (public endpoint).
-  // Done in parallel with subscription polling so the download button is
-  // ready the instant the customer's account flips active.
-  useEffect(() => {
-    fetch(`${API}/api/agent/version`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => { if (d?.download_url) setDmgURL(d.download_url); })
-      .catch(() => { /* non-fatal — they can still hit the dashboard */ });
-  }, []);
 
   useEffect(() => {
     const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
@@ -133,41 +122,22 @@ function OnboardingSuccessContent() {
                 <CheckCircle2Icon className="w-8 h-8 text-green-600" />
               </div>
               <h1 className="text-2xl font-bold text-gray-900 mb-2">
-                Payment received — let&rsquo;s install the Mac app.
+                You&rsquo;re in. We&rsquo;re provisioning your number.
               </h1>
               <p className="text-gray-500 mb-6">
-                Your dedicated iMessage number is being provisioned (Apple
-                requires a manual identity step on our end — usually a few
-                business hours). Meanwhile, install the Mac app on the
-                machine you want to send from.
+                Apple requires a manual identity step on our end before a
+                new iMessage line goes live — typically a few business hours.
+                You&rsquo;ll get an email the moment your number is ready
+                to send from. In the meantime, you can connect Go High Level
+                and invite your team from the dashboard.
               </p>
 
-              {dmgURL ? (
-                <a
-                  href={dmgURL}
-                  className="inline-block bg-[#2E6FE0] text-white font-semibold px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors"
-                >
-                  Download for Mac
-                </a>
-              ) : (
-                <p className="text-sm text-gray-400 mb-6">
-                  Fetching latest download link…
-                </p>
-              )}
-
-              <p className="text-xs text-gray-400 mt-4">
-                You only need to install on one Mac per number. Your team can
-                use the web app from anywhere.
-              </p>
-
-              <div className="mt-8 pt-6 border-t border-gray-200">
-                <button
-                  onClick={() => router.replace("/dashboard")}
-                  className="text-sm text-gray-500 hover:text-gray-900"
-                >
-                  Skip for now → Go to dashboard
-                </button>
-              </div>
+              <button
+                onClick={() => router.replace("/dashboard")}
+                className="inline-block bg-[#2E6FE0] text-white font-semibold px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors"
+              >
+                Open dashboard
+              </button>
             </>
           )}
 

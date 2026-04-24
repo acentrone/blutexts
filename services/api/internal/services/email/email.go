@@ -89,15 +89,20 @@ func (s *Service) SendPasswordReset(toEmail, token string) error {
 	return nil
 }
 
-// SendWelcome is the post-payment "you're in, here's how to install" email.
+// SendWelcome is the post-payment "you're in, here's what's next" email.
 // Sent from the Stripe webhook's onAccountActivated callback once
-// checkout.session.completed lands. Includes the Mac DMG download link
-// and a one-paragraph "what to expect" so the customer isn't dropped into
-// an empty dashboard with no instructions.
+// checkout.session.completed lands.
 //
-// dmgURL is fetched at call-site from agent_releases (active=true) so the
-// email always points at the latest signed build.
-func (s *Service) SendWelcome(toEmail, firstName, dmgURL string) error {
+// The customer never installs anything — BluTexts hosts the Mac + iPhone
+// fleet that backs every number, so the customer's path is just:
+//   1. We provision your number (manual ops, ~few business hours)
+//   2. You connect your CRM in the dashboard
+//   3. You start sending from the web app
+//
+// IMPORTANT: do NOT mention the Mac app, DMG download, or any local install
+// in this email. The desktop agent is internal-only — the customer doesn't
+// know it exists, and shouldn't.
+func (s *Service) SendWelcome(toEmail, firstName string) error {
 	subject := "Welcome to BluTexts — your dedicated number is being provisioned"
 
 	greeting := "there"
@@ -123,30 +128,35 @@ func (s *Service) SendWelcome(toEmail, firstName, dmgURL string) error {
     Payment received. Here&rsquo;s what happens next:
   </p>
 
-  <ol style="font-size: 15px; line-height: 1.7; padding-left: 22px; margin: 0 0 24px;">
+  <ol style="font-size: 15px; line-height: 1.7; padding-left: 22px; margin: 0 0 28px;">
     <li><strong>We&rsquo;re provisioning your dedicated iMessage number.</strong>
       Apple requires a manual identity step on our end — typically done within
       a few business hours. You&rsquo;ll get a follow-up email when your number
-      is live.</li>
-    <li><strong>Install the BluTexts Mac app</strong> on the machine you want
-      to send from (download below). You only need this on one Mac per
-      number — your team uses the web app from anywhere.</li>
-    <li><strong>Sign in to the dashboard</strong> at
-      <a href="%s" style="color: #2E6FE0;">%s</a> to invite teammates and
-      connect Go High Level.</li>
+      is live and ready to send from.</li>
+    <li><strong>Connect Go High Level</strong> from the dashboard — that&rsquo;s
+      where your replies route to and where automations trigger sends from.</li>
+    <li><strong>Invite your team</strong> (up to 5 seats included). Everyone
+      shares the inbox at <a href="%s" style="color: #2E6FE0;">%s</a>.</li>
   </ol>
 
   <div style="text-align: center; margin: 28px 0;">
-    <a href="%s" style="display: inline-block; background: #2E6FE0; color: white; font-weight: 600; padding: 14px 32px; border-radius: 10px; text-decoration: none; font-size: 15px;">
-      Download the Mac app
+    <a href="%s/dashboard" style="display: inline-block; background: #2E6FE0; color: white; font-weight: 600; padding: 14px 32px; border-radius: 10px; text-decoration: none; font-size: 15px;">
+      Open your dashboard
     </a>
   </div>
 
   <p style="font-size: 13px; color: #666; line-height: 1.5; margin: 0 0 8px;">
     <strong>About the 50-conversations-per-day limit:</strong> Apple caps every
     iMessage line at 50 NEW conversations per day to keep numbers in good
-    standing. Replies and ongoing threads are unlimited. We&rsquo;ll surface
-    your daily count in the dashboard.
+    standing. Replies and ongoing threads are unlimited. You&rsquo;ll see your
+    daily count in the dashboard.
+  </p>
+
+  <p style="font-size: 13px; color: #666; line-height: 1.5; margin: 12px 0 0;">
+    <strong>How sending works:</strong> BluTexts runs your number on a
+    dedicated iPhone in our facility — there&rsquo;s nothing to install on
+    your end. You send from the web app, we deliver as native iMessage,
+    replies route back to your inbox.
   </p>
 
   <p style="font-size: 14px; line-height: 1.6; margin: 24px 0 0;">
@@ -159,10 +169,10 @@ func (s *Service) SendWelcome(toEmail, firstName, dmgURL string) error {
     <a href="%s" style="color: #aaa;">%s</a>
   </p>
 </body>
-</html>`, greeting, s.appURL, s.appURL, dmgURL, s.appURL, s.appURL)
+</html>`, greeting, s.appURL, s.appURL, s.appURL, s.appURL, s.appURL)
 
 	if !s.enabled {
-		log.Printf("[email-dev] Welcome for %s → DMG: %s", toEmail, dmgURL)
+		log.Printf("[email-dev] Welcome for %s", toEmail)
 		return nil
 	}
 
