@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bluesend/api/internal/middleware"
 	"github.com/bluesend/api/internal/models"
@@ -414,52 +415,149 @@ func (h *MessageHandler) GetMessages(w http.ResponseWriter, r *http.Request) {
 func (h *MessageHandler) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := middleware.GetAccountID(r.Context())
 
+	// Resolve date window from ?from / ?to / ?range. Default: last 30d.
+	from, to := resolveDateRange(r)
+
 	var stats models.DashboardStats
+	stats.From = from
+	stats.To = to
 
-	// Total sent (last 30 days)
+	// ── Top-level aggregates ──────────────────────────────────────────────
+	// Counts span both services. The per-service breakdown is computed
+	// below in serviceStats(). Keeping the aggregate query separate keeps
+	// response_rate meaningful even if a customer has only one service.
 	h.db.QueryRow(r.Context(), `
-		SELECT COUNT(*) FROM messages
-		WHERE account_id = $1 AND direction = 'outbound' AND created_at >= NOW() - INTERVAL '30 days'
-	`, accountID).Scan(&stats.TotalSent)
+		SELECT
+		  COUNT(*) FILTER (WHERE direction = 'outbound'),
+		  COUNT(*) FILTER (WHERE direction = 'outbound' AND status IN ('delivered','read')),
+		  COUNT(DISTINCT contact_id) FILTER (WHERE direction = 'inbound')
+		FROM messages
+		WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+	`, accountID, from, to).Scan(&stats.TotalSent, &stats.TotalDelivered, &stats.TotalReplied)
 
-	// Delivered
-	h.db.QueryRow(r.Context(), `
-		SELECT COUNT(*) FROM messages
-		WHERE account_id = $1 AND direction = 'outbound' AND status IN ('delivered', 'read')
-		AND created_at >= NOW() - INTERVAL '30 days'
-	`, accountID).Scan(&stats.TotalDelivered)
-
-	// Replied (unique contacts that sent inbound after outbound)
+	// Reply rate uses "% of contacts you reached out to that wrote back" —
+	// denominator is distinct contacts messaged, NOT total send volume.
+	// (The previous formula divided replies by send count, which made any
+	// list with multiple sends per contact look broken.)
+	var totalContactsMessaged int
 	h.db.QueryRow(r.Context(), `
 		SELECT COUNT(DISTINCT contact_id) FROM messages
-		WHERE account_id = $1 AND direction = 'inbound'
-		AND created_at >= NOW() - INTERVAL '30 days'
-	`, accountID).Scan(&stats.TotalReplied)
-
-	// Response rate
-	if stats.TotalSent > 0 {
-		stats.ResponseRate = float64(stats.TotalReplied) / float64(stats.TotalSent) * 100
+		WHERE account_id = $1 AND direction = 'outbound'
+		  AND created_at >= $2 AND created_at < $3
+	`, accountID, from, to).Scan(&totalContactsMessaged)
+	if totalContactsMessaged > 0 {
+		stats.ResponseRate = float64(stats.TotalReplied) / float64(totalContactsMessaged) * 100
 	}
 
-	// Active conversations
+	// Per-service breakdown — direct apples-to-apples comparison in the
+	// same window. A contact who got both iMessage AND SMS sends and then
+	// replied counts for both services (we're measuring channel
+	// performance, not deduping the customer).
+	stats.Breakdown.IMessage = h.serviceStats(r, accountID, "imessage", from, to)
+	stats.Breakdown.SMS = h.serviceStats(r, accountID, "sms", from, to)
+
+	// "Today" counters are independent of the selected window — they
+	// power the daily-cap progress bar (always today, regardless of the
+	// range the user picked for the response-rate panel).
 	h.db.QueryRow(r.Context(), `
 		SELECT COUNT(*) FROM conversations WHERE account_id = $1 AND status = 'open'
 	`, accountID).Scan(&stats.ActiveConvos)
 
-	// Today's new contacts
 	h.db.QueryRow(r.Context(), `
 		SELECT COALESCE(SUM(message_count), 0) FROM rate_limit_daily
 		JOIN phone_numbers pn ON pn.id = phone_number_id
 		WHERE pn.account_id = $1 AND date = CURRENT_DATE AND is_new_contact = true
 	`, accountID).Scan(&stats.TodayNewContacts)
 
-	// Daily limit
 	h.db.QueryRow(r.Context(), `
 		SELECT COALESCE(SUM(daily_new_contact_limit), 50) FROM phone_numbers
 		WHERE account_id = $1 AND status = 'active'
 	`, accountID).Scan(&stats.DailyLimit)
 
 	writeJSON(w, stats, http.StatusOK)
+}
+
+// serviceStats computes the per-service slice of the dashboard breakdown.
+// See models.ServiceStats for the reply-rate definition (and why we use it).
+func (h *MessageHandler) serviceStats(r *http.Request, accountID interface{}, service string, from, to time.Time) models.ServiceStats {
+	var s models.ServiceStats
+
+	// Sent / delivered / contacts-messaged for this service in the window.
+	h.db.QueryRow(r.Context(), `
+		SELECT
+		  COUNT(*),
+		  COUNT(*) FILTER (WHERE status IN ('delivered','read')),
+		  COUNT(DISTINCT contact_id)
+		FROM messages
+		WHERE account_id = $1 AND direction = 'outbound' AND service = $2
+		  AND created_at >= $3 AND created_at < $4
+	`, accountID, service, from, to).Scan(&s.Sent, &s.Delivered, &s.ContactsMessaged)
+
+	// Replies attributed to this service: distinct inbound senders whose
+	// contact also received an outbound on this service in the same window.
+	// EXISTS keeps it efficient — no big join to materialize.
+	h.db.QueryRow(r.Context(), `
+		SELECT COUNT(DISTINCT m.contact_id)
+		FROM messages m
+		WHERE m.account_id = $1 AND m.direction = 'inbound'
+		  AND m.created_at >= $2 AND m.created_at < $3
+		  AND EXISTS (
+		    SELECT 1 FROM messages o
+		    WHERE o.account_id = m.account_id
+		      AND o.contact_id = m.contact_id
+		      AND o.direction = 'outbound'
+		      AND o.service = $4
+		      AND o.created_at >= $2 AND o.created_at < $3
+		  )
+	`, accountID, from, to, service).Scan(&s.ContactsReplied)
+
+	if s.ContactsMessaged > 0 {
+		s.ReplyRate = float64(s.ContactsReplied) / float64(s.ContactsMessaged) * 100
+	}
+	return s
+}
+
+// resolveDateRange normalizes ?from / ?to / ?range into a [from, to) window.
+// Accepts:
+//   ?range=7d|30d|90d              — preset shortcut
+//   ?from=YYYY-MM-DD&to=YYYY-MM-DD — explicit (inclusive of both days)
+// Falls back to last 30d on any invalid input — read-only dashboard, no
+// reason to 400 a button click.
+func resolveDateRange(r *http.Request) (time.Time, time.Time) {
+	now := time.Now().UTC()
+	to := now
+
+	if rng := r.URL.Query().Get("range"); rng != "" {
+		switch rng {
+		case "7d":
+			return now.Add(-7 * 24 * time.Hour), to
+		case "30d":
+			return now.Add(-30 * 24 * time.Hour), to
+		case "90d":
+			return now.Add(-90 * 24 * time.Hour), to
+		}
+	}
+
+	defaultFrom := now.Add(-30 * 24 * time.Hour)
+	from := defaultFrom
+
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			from = t.UTC()
+		}
+	}
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			to = t.UTC().Add(24 * time.Hour) // inclusive of the chosen day
+			if to.After(now) {
+				to = now
+			}
+		}
+	}
+	if !from.Before(to) {
+		return defaultFrom, now
+	}
+	return from, to
 }
 
 // GET /api/account/info — returns phone number, device status, and setup info for the user's dashboard

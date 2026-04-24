@@ -2,8 +2,11 @@
 
 import useSWR from "swr";
 import Link from "next/link";
+import { useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_URL;
+
+type DateRange = "7d" | "30d" | "90d";
 
 function fetcher(url: string) {
   const token = localStorage.getItem("access_token");
@@ -20,6 +23,14 @@ function fetcher(url: string) {
   });
 }
 
+interface ServiceStats {
+  sent: number;
+  delivered: number;
+  contacts_messaged: number;
+  contacts_replied: number;
+  reply_rate: number;
+}
+
 interface DashboardStats {
   total_sent: number;
   total_delivered: number;
@@ -28,6 +39,9 @@ interface DashboardStats {
   active_conversations: number;
   today_new_contacts: number;
   daily_limit: number;
+  breakdown: { imessage: ServiceStats; sms: ServiceStats };
+  from: string;
+  to: string;
 }
 
 interface AccountInfo {
@@ -71,9 +85,14 @@ function formatPhone(s: string): string {
 }
 
 export default function DashboardPage() {
+  // Date range only affects the response-rate comparison panel — the
+  // top-line stat cards still pull from the same endpoint, but the values
+  // shift with the range so the dashboard tells one consistent story.
+  const [range, setRange] = useState<DateRange>("30d");
+
   const { data: meData } = useSWR<AccountInfo>(`${API}/api/auth/me`, fetcher);
   const { data: stats } = useSWR<DashboardStats>(
-    `${API}/api/dashboard/stats`,
+    `${API}/api/dashboard/stats?range=${range}`,
     fetcher,
     { refreshInterval: 30000 }
   );
@@ -224,7 +243,7 @@ export default function DashboardPage() {
             </div>
             <div className="n">{(stats?.total_sent ?? 0).toLocaleString()}</div>
             <div className="label">Messages sent</div>
-            <div className="sub">Last 30 days</div>
+            <div className="sub">{rangeLabel(range)}</div>
           </div>
 
           <div className="stat success">
@@ -279,6 +298,13 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+
+        {/* iMessage vs SMS reply-rate comparison.
+            Hidden until there's at least some send activity so we don't
+            display an empty bar chart on a brand-new account. */}
+        {stats && (stats.breakdown.imessage.sent > 0 || stats.breakdown.sms.sent > 0) && (
+          <ServiceComparison stats={stats} range={range} setRange={setRange} />
+        )}
 
         {stats && stats.daily_limit > 0 && (
           <div className="limit-card">
@@ -350,6 +376,207 @@ function Step({
           {ctaLabel}
         </button>
       )}
+    </div>
+  );
+}
+
+function rangeLabel(r: DateRange): string {
+  return r === "7d" ? "Last 7 days" : r === "90d" ? "Last 90 days" : "Last 30 days";
+}
+
+/**
+ * iMessage vs SMS reply-rate comparison panel.
+ *
+ * Anatomy:
+ *   - Header with title + range tabs (7d / 30d / 90d) — clicking a tab
+ *     re-fetches the parent's stats query with the new ?range param.
+ *   - Two side-by-side rows, one per service. Each shows:
+ *       reply rate (the headline metric)
+ *       contacts replied / contacts messaged (the underlying numbers)
+ *       a horizontal bar visualizing the two rates against the same scale
+ *       sent / delivered counts as secondary stats
+ *
+ * The bar scale is normalized to whichever rate is higher, capped at 100%,
+ * so the visual difference between e.g. 32% iMessage and 8% SMS reads at
+ * a glance — the iMessage bar is fully extended, the SMS bar shows ~25%
+ * of that. Same scale = direct comparison.
+ */
+function ServiceComparison({
+  stats,
+  range,
+  setRange,
+}: {
+  stats: DashboardStats;
+  range: DateRange;
+  setRange: (r: DateRange) => void;
+}) {
+  const im = stats.breakdown.imessage;
+  const sms = stats.breakdown.sms;
+  const maxRate = Math.max(im.reply_rate, sms.reply_rate, 1); // avoid /0
+
+  // Pick the winning channel. Reads as a one-glance verdict at the top
+  // of the panel, even before the customer parses the bars below.
+  let verdict: React.ReactNode = null;
+  if (im.contacts_messaged > 0 && sms.contacts_messaged > 0) {
+    const ratio = sms.reply_rate > 0 ? im.reply_rate / sms.reply_rate : Infinity;
+    if (Number.isFinite(ratio) && ratio >= 1.1) {
+      verdict = (
+        <>iMessage is pulling <b>{ratio.toFixed(1)}× more replies</b> than SMS this period.</>
+      );
+    } else if (ratio < 0.9) {
+      verdict = (
+        <>SMS is outperforming iMessage on this list — worth a look.</>
+      );
+    } else {
+      verdict = <>Both channels performing similarly this period.</>;
+    }
+  } else if (im.contacts_messaged > 0) {
+    verdict = <>All sends went via iMessage this period.</>;
+  } else if (sms.contacts_messaged > 0) {
+    verdict = <>All sends went via SMS this period.</>;
+  }
+
+  return (
+    <div className="limit-card" style={{ marginTop: 0 }}>
+      <div
+        className="head"
+        style={{ alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}
+      >
+        <div>
+          <h4>iMessage vs SMS reply rate</h4>
+          <div className="sub">{verdict ?? rangeLabel(range)}</div>
+        </div>
+        <div
+          role="tablist"
+          aria-label="Date range"
+          style={{
+            display: "inline-flex",
+            background: "var(--paper, #f4f5f7)",
+            borderRadius: 8,
+            padding: 3,
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          {(["7d", "30d", "90d"] as DateRange[]).map((r) => {
+            const on = r === range;
+            return (
+              <button
+                key={r}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                onClick={() => setRange(r)}
+                style={{
+                  padding: "5px 12px",
+                  borderRadius: 6,
+                  border: 0,
+                  cursor: "pointer",
+                  background: on ? "#fff" : "transparent",
+                  color: on ? "var(--ink, #0b1220)" : "var(--muted, #6b7280)",
+                  boxShadow: on ? "0 1px 3px rgba(11,18,32,0.08)" : "none",
+                }}
+              >
+                {r === "7d" ? "7 days" : r === "30d" ? "30 days" : "90 days"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 18, display: "grid", gap: 14 }}>
+        <ServiceRow
+          label="iMessage"
+          accent="var(--blu, #2e6fe0)"
+          stats={im}
+          maxRate={maxRate}
+        />
+        <ServiceRow
+          label="SMS"
+          accent="#3fc34c"
+          stats={sms}
+          maxRate={maxRate}
+        />
+      </div>
+
+      <div className="foot" style={{ marginTop: 14 }}>
+        Reply rate = unique contacts who replied ÷ unique contacts messaged in the window.
+        A contact who got both channels and replied counts for both.
+      </div>
+    </div>
+  );
+}
+
+function ServiceRow({
+  label,
+  accent,
+  stats,
+  maxRate,
+}: {
+  label: string;
+  accent: string;
+  stats: ServiceStats;
+  maxRate: number;
+}) {
+  // Bar width relative to the higher of the two rates. Floor at 2% so a
+  // tiny but non-zero rate still shows a sliver instead of disappearing.
+  const barPct = stats.reply_rate > 0 ? Math.max((stats.reply_rate / maxRate) * 100, 2) : 0;
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "100px 1fr auto",
+        gap: 16,
+        alignItems: "center",
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink, #0b1220)" }}>
+          {label}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted, #6b7280)", marginTop: 2 }}>
+          {stats.sent.toLocaleString()} sent · {stats.delivered.toLocaleString()} delivered
+        </div>
+      </div>
+
+      <div
+        style={{
+          height: 14,
+          background: "var(--paper-2, #f4f5f7)",
+          borderRadius: 7,
+          overflow: "hidden",
+          position: "relative",
+        }}
+      >
+        <div
+          style={{
+            width: `${barPct}%`,
+            height: "100%",
+            background: accent,
+            borderRadius: 7,
+            transition: "width 0.4s cubic-bezier(0.22, 1, 0.36, 1)",
+          }}
+        />
+      </div>
+
+      <div style={{ minWidth: 110, textAlign: "right" }}>
+        <div
+          style={{
+            fontFamily: "'Instrument Serif', serif",
+            fontStyle: "italic",
+            fontSize: 28,
+            lineHeight: 1,
+            letterSpacing: "-0.4px",
+            color: stats.reply_rate > 0 ? accent : "var(--muted, #6b7280)",
+          }}
+        >
+          {stats.reply_rate.toFixed(1)}%
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted, #6b7280)", marginTop: 2 }}>
+          {stats.contacts_replied.toLocaleString()} / {stats.contacts_messaged.toLocaleString()} contacts
+        </div>
+      </div>
     </div>
   );
 }

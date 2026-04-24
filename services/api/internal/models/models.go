@@ -321,14 +321,48 @@ type RateLimitInfo struct {
 	ResetsAt              string `json:"resets_at"`
 }
 
+// ServiceStats are the per-service counts within a date range. Used for the
+// "iMessage vs SMS" comparison block on the dashboard so the customer can see
+// at a glance which channel is actually working for their list.
+//
+// Reply-rate semantics (deliberate — see GetDashboardStats):
+//   contacts_messaged = distinct contacts that received an outbound on this
+//                       service inside the window
+//   contacts_replied  = distinct contacts that sent ANY inbound inside the
+//                       window AND received an outbound on this service in
+//                       the same window
+//   reply_rate        = contacts_replied / contacts_messaged
+//
+// A contact who got both iMessage and SMS sends and replied counts for both
+// services. That's the right behavior for "is this channel landing replies?"
+// — we're measuring channel performance, not deduping the customer.
+type ServiceStats struct {
+	Sent             int     `json:"sent"`
+	Delivered        int     `json:"delivered"`
+	ContactsMessaged int     `json:"contacts_messaged"`
+	ContactsReplied  int     `json:"contacts_replied"`
+	ReplyRate        float64 `json:"reply_rate"`
+}
+
+type ServiceBreakdown struct {
+	IMessage ServiceStats `json:"imessage"`
+	SMS      ServiceStats `json:"sms"`
+}
+
 type DashboardStats struct {
-	TotalSent       int     `json:"total_sent"`
-	TotalDelivered  int     `json:"total_delivered"`
-	TotalReplied    int     `json:"total_replied"`
-	ResponseRate    float64 `json:"response_rate"`
-	ActiveConvos    int     `json:"active_conversations"`
-	TodayNewContacts int    `json:"today_new_contacts"`
-	DailyLimit      int     `json:"daily_limit"`
+	// ── Top-level counters (aggregate across both services in the window) ──
+	TotalSent        int     `json:"total_sent"`
+	TotalDelivered   int     `json:"total_delivered"`
+	TotalReplied     int     `json:"total_replied"`
+	ResponseRate     float64 `json:"response_rate"`
+	ActiveConvos     int     `json:"active_conversations"`
+	TodayNewContacts int     `json:"today_new_contacts"`
+	DailyLimit       int     `json:"daily_limit"`
+
+	// ── Per-service comparison + the date window the row covers ───────────
+	Breakdown ServiceBreakdown `json:"breakdown"`
+	From      time.Time        `json:"from"`
+	To        time.Time        `json:"to"`
 }
 
 type CreateCheckoutRequest struct {
