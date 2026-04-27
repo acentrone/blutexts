@@ -985,13 +985,20 @@
   font-size: 13px; color: var(--muted);
 }
 .app-root .threads-pane .thread {
-  display: grid; grid-template-columns: 40px 1fr auto; gap: 12px;
+  /* Flex (not grid) for resilience: a single stray utility class on the
+     button — Tailwind, browser-extension CSS, anything — was forcing the
+     grid into a single 221px row with avatar and body landing in opposite
+     halves. Flex layout sizes to content height and ignores most strays. */
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 10px 12px;
   border-radius: 10px;
   cursor: pointer;
   margin-bottom: 2px;
-  align-items: center;
   width: 100%;
+  height: auto;             /* defensive — no parent can stretch us tall */
+  min-height: 0;
   text-align: left;
   background: none;
   border: 0;
@@ -1000,8 +1007,11 @@
 }
 .app-root .threads-pane .thread:hover { background: var(--hover); }
 .app-root .threads-pane .thread.selected { background: var(--blu-tint); }
-.app-root .threads-pane .thread .avatar { width: 40px; height: 40px; font-size: 13px; }
-.app-root .threads-pane .thread .body { min-width: 0; }
+.app-root .threads-pane .thread .avatar { width: 40px; height: 40px; font-size: 13px; flex-shrink: 0; }
+/* flex: 1 makes body fill the remaining space; min-width: 0 lets it shrink below
+   intrinsic content width so name + preview can ellipsis instead of pushing
+   the row wider than the threads pane. */
+.app-root .threads-pane .thread .body { flex: 1; min-width: 0; }
 .app-root .threads-pane .thread .name-row {
   display: flex; justify-content: space-between;
   font-size: 13.5px; font-weight: 600; color: var(--ink);

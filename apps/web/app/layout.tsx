@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import "./globals.css";
 import "./app-brand.css";
 
@@ -47,16 +46,15 @@ export default function RootLayout({
       <body className="min-h-screen bg-background font-sans antialiased">
         {children}
         {/*
-          iClosed widget loader.
-          - `afterInteractive` ensures it runs AFTER React hydrates, so the
-            loader sees React-rendered buttons with data-iclosed-link.
-          - Loaded site-wide so the popup works on every marketing route
-            and the inline embed on /demo picks it up too.
+          iClosed widget loader was previously here at the root layout level,
+          but that loaded it on EVERY route — including app.blutexts.com
+          dashboard pages — where it injected its widget.css 5 times per
+          session and (probably) interfered with the dashboard's flex/grid
+          layouts (the conversations list was breaking with avatar + body
+          rendering on separate visual rows). Moved into the marketing-only
+          layout at app/(marketing)/layout.tsx so it loads ONLY on the
+          public marketing routes that actually use Book-a-demo CTAs.
         */}
-        <Script
-          src="https://app.iclosed.io/assets/widget.js"
-          strategy="afterInteractive"
-        />
       </body>
     </html>
   );
