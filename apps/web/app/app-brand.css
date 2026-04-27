@@ -912,11 +912,17 @@
 /* The messages page lives inside the standard 248px sidebar shell — the
    threads list + conversation pane are handled by .messages-grid below.
    Sized via flex (NOT height: 100vh) so it sits flush under the optional
-   billing banner instead of pushing past the viewport bottom. */
+   billing banner instead of pushing past the viewport bottom.
+   !important on width/grid-template-columns/margin because the same
+   browser extension that was injecting margin on .body was also
+   constraining the messages container width — forcing the conv-pane
+   into a narrow ~400px column with empty space to the right. */
 .app-root .messages-grid {
-  display: grid;
-  grid-template-columns: 320px 1fr;
-  width: 100%;
+  display: grid !important;
+  grid-template-columns: 320px 1fr !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
   flex: 1;
   min-height: 0;
   background: #fff;
@@ -1061,10 +1067,15 @@
 }
 
 .app-root .convo-pane {
-  display: flex; flex-direction: column;
+  display: flex !important;
+  flex-direction: column !important;
   background: #fff;
   overflow: hidden;
   height: 100vh;
+  width: 100% !important;       /* fill grid column 2 — extension was constraining this */
+  max-width: none !important;
+  margin: 0 !important;
+  min-width: 0;
 }
 .app-root .convo-pane .empty {
   flex: 1; display: flex; flex-direction: column;
