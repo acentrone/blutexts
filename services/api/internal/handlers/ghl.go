@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"context"
-	"crypto/hmac"
+	"crypto"
+	"crypto/rsa"
 	"crypto/sha256"
-	"encoding/hex"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log"
 	"net/http"
@@ -37,25 +40,67 @@ func NewGHLHandler(db *pgxpool.Pool, provisioner *ghl.Provisioner, msgRouter *me
 	}
 }
 
-// verifyWebhookSignature checks the GHL HMAC-SHA256 signature on a webhook
-// body. GHL signs request bodies with the shared secret and sends the hex
-// digest in either `x-wh-signature` or `x-ghl-signature`. Returns true when
-// at least one of those headers matches; false otherwise.
+// ghlPublicKey is GHL's well-known RSA-2048 public key for verifying webhook
+// signatures. It's published in their developer docs and is the same key for
+// Marketplace App webhooks (x-wh-signature) and Conversation Provider
+// webhooks (x-ghl-signature). They sign with their private key; we verify
+// with this public key — no shared secret required.
 //
-// Constant-time compare to prevent timing attacks. We accept either header
-// to be defensive against GHL changing the canonical name (it has shifted
-// historically). Empty signature → reject.
+// We previously had the wrong scheme entirely (HMAC-SHA256 with a shared
+// secret), which is what the legacy GHL webhooks used. Every modern GHL
+// webhook signs with RSA-SHA256 + base64. The HMAC verifier returned 401
+// on every request and the customer saw a non-functional integration.
+const ghlPublicKey = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAokvo/r9tVgcfZ5DysOSC
+Frm602qYV0MaAiNnX9O8KxMbiyRKWeL9JpCpVpt4XHIcBOK4u3cLSqJGOLaPuXw6
+dO0t6Q/ZVdAV5Phz+ZtzPL16iCGeK9po6D6JHBpbi989mmzMryUnQJezlYJ3DVfB
+csedpinheNnyYeFXolrJvcsjDtfAeRx5ByHQmTnSdFUzuAnC9/GepgLT9SM4nCpv
+uxmZMxrJt5Rw+VUaQ9B8JSvbMPpez4peKaJPZHBbU3OdeCVx5klVXXZQGNHOs8gF
+3kvoV5rTnXV0IknbBIPRu5oV3nuTjLR5O4uRkcd+fwyzPJYqeKVLOFCm3mIJ+wWR
+2QIDAQAB
+-----END PUBLIC KEY-----`
+
+// parsedGHLPubKey is the parsed key cached at process start so each webhook
+// doesn't re-parse the PEM. nil if parsing failed (would only happen if the
+// PEM constant above was corrupted in a build) — we fail closed in that case.
+var parsedGHLPubKey *rsa.PublicKey
+
+func init() {
+	block, _ := pem.Decode([]byte(ghlPublicKey))
+	if block == nil {
+		log.Printf("GHL webhook: failed to PEM-decode public key — webhooks will all 401")
+		return
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		log.Printf("GHL webhook: failed to parse public key: %v", err)
+		return
+	}
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		log.Printf("GHL webhook: parsed key is not RSA")
+		return
+	}
+	parsedGHLPubKey = rsaPub
+}
+
+// verifyWebhookSignature checks the GHL RSA-SHA256 signature on a webhook
+// body. GHL signs request bodies with their private key and sends the
+// base64-encoded signature in either `x-wh-signature` (marketplace apps)
+// or `x-ghl-signature` (conversation providers).
 //
-// Logs the SPECIFIC failure mode (missing secret env / no signature header /
-// signature mismatch) so a 401 in production can be diagnosed from logs
-// without leaking the secret. Provided/expected sigs are truncated to the
-// first 8 hex chars — enough to confirm a mismatch, not enough to be useful
-// to an attacker.
+// We verify with their published public key (no shared secret needed).
+// GHL_WEBHOOK_SECRET in env is no longer consulted for signature
+// verification — it's now strictly informational and can be removed.
+//
+// Logs the specific failure mode so a 401 in production can be diagnosed
+// from logs without leaking signature material.
 func (h *GHLHandler) verifyWebhookSignature(body []byte, r *http.Request) bool {
-	if h.webhookSecret == "" {
-		log.Printf("GHL webhook HMAC: GHL_WEBHOOK_SECRET env var is empty — every request will 401")
+	if parsedGHLPubKey == nil {
+		log.Printf("GHL webhook: public key not parsed (build issue) — failing closed")
 		return false
 	}
+
 	provided := r.Header.Get("x-wh-signature")
 	headerUsed := "x-wh-signature"
 	if provided == "" {
@@ -63,21 +108,27 @@ func (h *GHLHandler) verifyWebhookSignature(body []byte, r *http.Request) bool {
 		headerUsed = "x-ghl-signature"
 	}
 	if provided == "" {
-		log.Printf("GHL webhook HMAC: no signature header present (checked x-wh-signature + x-ghl-signature)")
+		log.Printf("GHL webhook: no signature header present (checked x-wh-signature + x-ghl-signature)")
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(h.webhookSecret))
-	mac.Write(body)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(expected), []byte(provided)) {
-		log.Printf("GHL webhook HMAC: mismatch (header=%s provided=%s… expected=%s… body_bytes=%d)",
-			headerUsed, sigPrefix(provided), sigPrefix(expected), len(body))
+
+	sig, err := base64.StdEncoding.DecodeString(provided)
+	if err != nil {
+		log.Printf("GHL webhook: signature is not valid base64 (header=%s prefix=%s…): %v",
+			headerUsed, sigPrefix(provided), err)
+		return false
+	}
+
+	hashed := sha256.Sum256(body)
+	if err := rsa.VerifyPKCS1v15(parsedGHLPubKey, crypto.SHA256, hashed[:], sig); err != nil {
+		log.Printf("GHL webhook: RSA verify failed (header=%s prefix=%s… body_bytes=%d): %v",
+			headerUsed, sigPrefix(provided), len(body), err)
 		return false
 	}
 	return true
 }
 
-// sigPrefix returns the first 8 hex chars of a signature for safe logging.
+// sigPrefix returns the first 8 chars of a signature for safe logging.
 func sigPrefix(s string) string {
 	if len(s) <= 8 {
 		return s
