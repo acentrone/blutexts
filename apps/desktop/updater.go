@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const AppVersion = "1.2.2"
+const AppVersion = "2.4.0"
 
 // VersionInfo is returned by the API's /api/agent/version endpoint.
 type VersionInfo struct {
@@ -91,7 +91,7 @@ func (a *App) DownloadAndInstallUpdate() UpdateStatus {
 
 	// Download to temp
 	tmpDir := os.TempDir()
-	dmgPath := filepath.Join(tmpDir, "BlueSend-update.dmg")
+	dmgPath := filepath.Join(tmpDir, "BluTexts-update.dmg")
 
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Get(currentUpdate.DownloadURL)
@@ -165,7 +165,7 @@ func installFromDMG(dmgPath string) error {
 	dstApp := filepath.Join("/Applications", appName)
 
 	// Stage the new app to a temp location, then swap on restart
-	stagePath := filepath.Join(os.TempDir(), "BlueSend-staged.app")
+	stagePath := filepath.Join(os.TempDir(), "BluTexts-staged.app")
 	os.RemoveAll(stagePath)
 	cmd := exec.Command("cp", "-R", srcApp, stagePath)
 	if out, err := cmd.CombinedOutput(); err != nil {
