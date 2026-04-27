@@ -26,9 +26,7 @@ const STANDARD_FEATURES = [
   "5 user seats",
   "Unlimited messages per day",
   "50 new conversations / day (Apple compliance cap)",
-  "SMS fallback included",
   "HighLevel integration",
-  "Web inbox + macOS app",
   "Tapbacks, effects, voice messages",
   "Reply-rate analytics",
   "Email + chat support",
@@ -61,11 +59,15 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: "How is BluText different from a regular SMS service?",
-    a: "BluText sends through Apple's iMessage network on a real, dedicated number tied to your team — not a shortcode. Recipients see a blue bubble from a real phone number, exactly like a text from a friend. SMS fallback kicks in automatically when iMessage isn't available.",
+    a: "BluText sends through Apple's iMessage network on a real, dedicated number tied to your team — not a shortcode. Recipients see a blue bubble from a real phone number, exactly like a text from a friend.",
+  },
+  {
+    q: "What if my recipient isn't on iMessage?",
+    a: "BluText delivers iMessage only — no SMS fallback today. The vast majority of US consumers are on iPhone (~57% market share), and our typical customers see >90% iMessage deliverability on cleaned lists. If you need guaranteed-cross-platform delivery, pair BluText with your existing SMS provider for non-iPhone segments.",
   },
   {
     q: "Do I need an A2P 10DLC registration?",
-    a: "No. Because we send via iMessage on a real number (not via carrier shortcodes), we sidestep the A2P registration process. SMS fallback uses standard P2P messaging and inherits your number's reputation.",
+    a: "No. Because we send via iMessage on a real number (not via carrier shortcodes), we sidestep the A2P registration process entirely.",
   },
   {
     q: "What does Enterprise unlock?",

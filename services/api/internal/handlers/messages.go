@@ -296,7 +296,7 @@ func (h *MessageHandler) ListConversations(w http.ResponseWriter, r *http.Reques
 	rows, err := h.db.Query(r.Context(), `
 		SELECT c.id, c.phone_number_id, c.contact_id, c.ghl_conversation_id,
 		       c.last_message_at, c.last_message_preview, c.message_count, c.unread_count, c.status,
-		       ct.imessage_address, ct.name, ct.imessage_capable,
+		       ct.imessage_address, ct.name,
 		       pn.number, pn.display_name
 		FROM conversations c
 		JOIN contacts ct ON ct.id = c.contact_id
@@ -313,11 +313,10 @@ func (h *MessageHandler) ListConversations(w http.ResponseWriter, r *http.Reques
 
 	type ConversationRow struct {
 		models.Conversation
-		ContactAddress         string  `json:"contact_address"`
-		ContactName            *string `json:"contact_name"`
-		ContactIMessageCapable *bool   `json:"contact_imessage_capable"`
-		PhoneNumber            string  `json:"phone_number"`
-		PhoneDisplayName       *string `json:"phone_display_name"`
+		ContactAddress   string  `json:"contact_address"`
+		ContactName      *string `json:"contact_name"`
+		PhoneNumber      string  `json:"phone_number"`
+		PhoneDisplayName *string `json:"phone_display_name"`
 	}
 
 	var conversations []ConversationRow
@@ -326,7 +325,7 @@ func (h *MessageHandler) ListConversations(w http.ResponseWriter, r *http.Reques
 		if err := rows.Scan(
 			&c.ID, &c.PhoneNumberID, &c.ContactID, &c.GHLConversationID,
 			&c.LastMessageAt, &c.LastMessagePreview, &c.MessageCount, &c.UnreadCount, &c.Status,
-			&c.ContactAddress, &c.ContactName, &c.ContactIMessageCapable,
+			&c.ContactAddress, &c.ContactName,
 			&c.PhoneNumber, &c.PhoneDisplayName,
 		); err != nil {
 			continue
@@ -449,13 +448,6 @@ func (h *MessageHandler) GetDashboardStats(w http.ResponseWriter, r *http.Reques
 		stats.ResponseRate = float64(stats.TotalReplied) / float64(totalContactsMessaged) * 100
 	}
 
-	// Per-service breakdown — direct apples-to-apples comparison in the
-	// same window. A contact who got both iMessage AND SMS sends and then
-	// replied counts for both services (we're measuring channel
-	// performance, not deduping the customer).
-	stats.Breakdown.IMessage = h.serviceStats(r, accountID, "imessage", from, to)
-	stats.Breakdown.SMS = h.serviceStats(r, accountID, "sms", from, to)
-
 	// "Today" counters are independent of the selected window — they
 	// power the daily-cap progress bar (always today, regardless of the
 	// range the user picked for the response-rate panel).
@@ -475,46 +467,6 @@ func (h *MessageHandler) GetDashboardStats(w http.ResponseWriter, r *http.Reques
 	`, accountID).Scan(&stats.DailyLimit)
 
 	writeJSON(w, stats, http.StatusOK)
-}
-
-// serviceStats computes the per-service slice of the dashboard breakdown.
-// See models.ServiceStats for the reply-rate definition (and why we use it).
-func (h *MessageHandler) serviceStats(r *http.Request, accountID interface{}, service string, from, to time.Time) models.ServiceStats {
-	var s models.ServiceStats
-
-	// Sent / delivered / contacts-messaged for this service in the window.
-	h.db.QueryRow(r.Context(), `
-		SELECT
-		  COUNT(*),
-		  COUNT(*) FILTER (WHERE status IN ('delivered','read')),
-		  COUNT(DISTINCT contact_id)
-		FROM messages
-		WHERE account_id = $1 AND direction = 'outbound' AND service = $2
-		  AND created_at >= $3 AND created_at < $4
-	`, accountID, service, from, to).Scan(&s.Sent, &s.Delivered, &s.ContactsMessaged)
-
-	// Replies attributed to this service: distinct inbound senders whose
-	// contact also received an outbound on this service in the same window.
-	// EXISTS keeps it efficient — no big join to materialize.
-	h.db.QueryRow(r.Context(), `
-		SELECT COUNT(DISTINCT m.contact_id)
-		FROM messages m
-		WHERE m.account_id = $1 AND m.direction = 'inbound'
-		  AND m.created_at >= $2 AND m.created_at < $3
-		  AND EXISTS (
-		    SELECT 1 FROM messages o
-		    WHERE o.account_id = m.account_id
-		      AND o.contact_id = m.contact_id
-		      AND o.direction = 'outbound'
-		      AND o.service = $4
-		      AND o.created_at >= $2 AND o.created_at < $3
-		  )
-	`, accountID, from, to, service).Scan(&s.ContactsReplied)
-
-	if s.ContactsMessaged > 0 {
-		s.ReplyRate = float64(s.ContactsReplied) / float64(s.ContactsMessaged) * 100
-	}
-	return s
 }
 
 // resolveDateRange normalizes ?from / ?to / ?range into a [from, to) window.

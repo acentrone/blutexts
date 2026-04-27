@@ -128,10 +128,11 @@ export default function HighLevelDetail() {
             </div>
             <div className="pillar-card">
               <div className="ic">c</div>
-              <h3>SMS fallback, automatic</h3>
+              <h3>Replies sync into HighLevel</h3>
               <p>
-                If a contact can&apos;t receive iMessage, the same workflow
-                step routes to SMS. No branching logic, no double sends.
+                Inbound iMessages land on the contact&apos;s timeline in
+                HighLevel automatically — same conversation surface your
+                team already lives in.
               </p>
             </div>
           </div>

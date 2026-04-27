@@ -45,22 +45,44 @@ func NewGHLHandler(db *pgxpool.Pool, provisioner *ghl.Provisioner, msgRouter *me
 // Constant-time compare to prevent timing attacks. We accept either header
 // to be defensive against GHL changing the canonical name (it has shifted
 // historically). Empty signature → reject.
+//
+// Logs the SPECIFIC failure mode (missing secret env / no signature header /
+// signature mismatch) so a 401 in production can be diagnosed from logs
+// without leaking the secret. Provided/expected sigs are truncated to the
+// first 8 hex chars — enough to confirm a mismatch, not enough to be useful
+// to an attacker.
 func (h *GHLHandler) verifyWebhookSignature(body []byte, r *http.Request) bool {
 	if h.webhookSecret == "" {
-		// Misconfiguration — fail closed rather than open.
+		log.Printf("GHL webhook HMAC: GHL_WEBHOOK_SECRET env var is empty — every request will 401")
 		return false
 	}
 	provided := r.Header.Get("x-wh-signature")
+	headerUsed := "x-wh-signature"
 	if provided == "" {
 		provided = r.Header.Get("x-ghl-signature")
+		headerUsed = "x-ghl-signature"
 	}
 	if provided == "" {
+		log.Printf("GHL webhook HMAC: no signature header present (checked x-wh-signature + x-ghl-signature)")
 		return false
 	}
 	mac := hmac.New(sha256.New, []byte(h.webhookSecret))
 	mac.Write(body)
 	expected := hex.EncodeToString(mac.Sum(nil))
-	return hmac.Equal([]byte(expected), []byte(provided))
+	if !hmac.Equal([]byte(expected), []byte(provided)) {
+		log.Printf("GHL webhook HMAC: mismatch (header=%s provided=%s… expected=%s… body_bytes=%d)",
+			headerUsed, sigPrefix(provided), sigPrefix(expected), len(body))
+		return false
+	}
+	return true
+}
+
+// sigPrefix returns the first 8 hex chars of a signature for safe logging.
+func sigPrefix(s string) string {
+	if len(s) <= 8 {
+		return s
+	}
+	return s[:8]
 }
 
 // GET /api/oauth/connect — redirect to GHL OAuth (called from dashboard after signup)

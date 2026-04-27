@@ -70,7 +70,7 @@ export default function MarketingHomePage() {
             <div className="meta-row">
               <span className="check">Dedicated numbers</span>
               <span className="check">No A2P roadblocks</span>
-              <span className="check">SMS fallback built-in</span>
+              <span className="check">Replies route to your CRM</span>
             </div>
           </div>
 
@@ -317,9 +317,9 @@ export default function MarketingHomePage() {
               <div className="n">02</div>
               <h4>Messages flow through Blu.</h4>
               <p>
-                Send from the web. Automate from your CRM. If a contact
-                can&apos;t receive iMessage, Blu falls back to SMS —
-                automatically.
+                Send from the web. Automate from your CRM. Every message
+                lands as a native iMessage from your dedicated number — and
+                replies route straight back into your inbox.
               </p>
             </div>
             <div className="arrow-sep">

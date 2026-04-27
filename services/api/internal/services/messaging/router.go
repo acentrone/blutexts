@@ -160,16 +160,11 @@ func (r *Router) Send(ctx context.Context, req *models.SendMessageRequest, accou
 		WHERE id = $3
 	`, time.Now(), truncate(preview, 100), conv.ID)
 
-	// Look up cached iMessage capability so the device can skip the
-	// availability lookup. nil means we haven't checked yet — the device
-	// will query Apple's identity servers and report back, and we'll
-	// persist the result on the contact for next time.
-	var imessageCapable *bool
-	_ = r.db.QueryRow(ctx,
-		`SELECT imessage_capable FROM contacts WHERE id = $1`, contact.ID,
-	).Scan(&imessageCapable)
-
-	// Push send job to device via WebSocket hub
+	// iMessage-only — no capability check, no SMS fallback path. The device
+	// will attempt to send as iMessage and surface a delivery failure if
+	// the recipient isn't on iMessage. (We may add a real SMS/RCS rail
+	// later as a separate carrier integration; until then, blue bubbles or
+	// nothing.)
 	sendPayload := models.DeviceSendPayload{
 		MessageID:       msg.ID.String(),
 		PhoneNumber:     pn.Number,
@@ -178,7 +173,6 @@ func (r *Router) Send(ctx context.Context, req *models.SendMessageRequest, accou
 		IMessageAddress: deref(pn.IMessageAddress),
 		Attachments:     req.Attachments,
 		Effect:          req.Effect,
-		IMessageCapable: imessageCapable,
 	}
 	if err := r.hub.SendToDevice(*pn.DeviceID, models.DeviceWSEvent{
 		Type:    models.DeviceEventSendMessage,

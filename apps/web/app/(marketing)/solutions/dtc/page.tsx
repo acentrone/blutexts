@@ -4,7 +4,7 @@ import SolutionPage from "../../_components/SolutionPage";
 export const metadata: Metadata = {
   title: "iMessage for DTC brands — BluText",
   description:
-    "Win-back, abandoned-cart, and post-purchase flows that read like a friend texting — not a brand blasting. Real iMessage on real numbers, with SMS fallback built in.",
+    "Win-back, abandoned-cart, and post-purchase flows that read like a friend texting — not a brand blasting. Real iMessage on a real number that customers actually open.",
   alternates: { canonical: "https://blutexts.com/solutions/dtc" },
 };
 
