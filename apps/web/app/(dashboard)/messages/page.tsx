@@ -685,8 +685,7 @@ export default function MessagesPage() {
     <div className="messages-grid">
       {/* ── Threads pane ── */}
       <section
-        className="threads-pane"
-        style={mobileShowThread ? { display: "none" } : undefined}
+        className={`threads-pane${mobileShowThread ? " mobile-hidden" : ""}`}
       >
         <div className="head">
           <h2>Conversations</h2>

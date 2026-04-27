@@ -1082,6 +1082,14 @@
   max-width: none !important;
   margin: 0 !important;
   min-width: 0;
+  grid-column: 2 !important;    /* anchor to column 2 so even if threads-pane hides,
+                                   we don't fall back to column 1 (320px wide) */
+}
+
+/* threads-pane is only hidden at mobile widths when the user opens a
+   conversation. On desktop both panes stay visible side-by-side. */
+@media (max-width: 768px) {
+  .app-root .threads-pane.mobile-hidden { display: none; }
 }
 .app-root .convo-pane .empty {
   flex: 1; display: flex; flex-direction: column;
