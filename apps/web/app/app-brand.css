@@ -985,25 +985,46 @@
   font-size: 13px; color: var(--muted);
 }
 .app-root .threads-pane .thread {
-  /* Flex (not grid) for resilience: a single stray utility class on the
-     button — Tailwind, browser-extension CSS, anything — was forcing the
-     grid into a single 221px row with avatar and body landing in opposite
-     halves. Flex layout sizes to content height and ignores most strays. */
-  display: flex;
-  align-items: center;
+  /* Flex layout. After the grid version was producing a 221px-tall row
+     with children at incompatible y-positions, we switched to flex and
+     it STILL produced a 241px-tall row with avatar and body offset by
+     ~90px. Something exotic is happening (likely a position:absolute
+     or transform on a child from a stale style). Hard caps + explicit
+     position:static on children to force the layout. */
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
   gap: 12px;
   padding: 10px 12px;
   border-radius: 10px;
   cursor: pointer;
   margin-bottom: 2px;
   width: 100%;
-  height: auto;             /* defensive — no parent can stretch us tall */
-  min-height: 0;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: 72px !important;   /* hard cap — content is ~60px max */
   text-align: left;
   background: none;
   border: 0;
   font-family: inherit;
   color: var(--ink);
+  position: relative;            /* establish positioning context */
+  overflow: hidden;              /* clip any rogue absolute children */
+}
+/* Force children back into the flex row. A browser extension was injecting
+   `margin-bottom: 180px` onto the .body div (probably targeting `.body`
+   thinking it was the document body), which made the flex row's cross-size
+   grow to ~220px and split avatar + body to opposite ends.
+   `margin: 0 !important` neutralizes any extension-injected margin so the
+   row sizes to actual content height. The position/transform/inset/align-self
+   overrides are belt-and-suspenders against other extension shenanigans. */
+.app-root .threads-pane .thread > * {
+  position: static !important;
+  transform: none !important;
+  inset: auto !important;
+  margin: 0 !important;
+  align-self: center !important;
 }
 .app-root .threads-pane .thread:hover { background: var(--hover); }
 .app-root .threads-pane .thread.selected { background: var(--blu-tint); }
