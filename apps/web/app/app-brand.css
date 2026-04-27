@@ -908,6 +908,12 @@
 
 /* ═══════════════════════════════════════════════════════════
    Messages page (3-column shell + bubble redesign)
+   ───────────────────────────────────────────────────────────
+   Deploy-pipeline note: the Vercel project's Root Directory is set to
+   `apps/web` so git-triggered builds clone the repo and chdir here
+   before reading vercel.json. Local `vercel --prod` from this dir no
+   longer works (Vercel looks for `apps/web` inside `apps/web` and
+   errors); use `git push origin main` to deploy from now on.
    ═══════════════════════════════════════════════════════════ */
 /* The messages page lives inside the standard 248px sidebar shell — the
    threads list + conversation pane are handled by .messages-grid below.
