@@ -241,10 +241,29 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		accountID,
 	).Scan(&ghlLocationID)
 
+	// Primary phone number + the device that backs it. Powers the sidebar's
+	// "Your Blu number / Device online|offline" pill so it's available on
+	// every page without each one needing its own /api/account/info fetch.
+	// LEFT JOIN to devices so a number with no assigned device returns nulls
+	// instead of dropping the row entirely. ORDER BY created_at to pick the
+	// oldest active number when an account has multiple (Enterprise tier).
+	var primaryPhoneNumber, deviceName, deviceStatus *string
+	h.db.QueryRow(r.Context(), `
+		SELECT pn.number, d.name, d.status
+		FROM phone_numbers pn
+		LEFT JOIN devices d ON d.id = pn.device_id
+		WHERE pn.account_id = $1 AND pn.status = 'active'
+		ORDER BY pn.created_at ASC
+		LIMIT 1
+	`, accountID).Scan(&primaryPhoneNumber, &deviceName, &deviceStatus)
+
 	writeJSON(w, map[string]interface{}{
-		"user":            user,
-		"account":         account,
-		"ghl_location_id": ghlLocationID,
+		"user":                 user,
+		"account":              account,
+		"ghl_location_id":      ghlLocationID,
+		"primary_phone_number": primaryPhoneNumber,
+		"device_name":          deviceName,
+		"device_status":        deviceStatus,
 	}, http.StatusOK)
 }
 
